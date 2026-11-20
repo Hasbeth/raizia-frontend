@@ -7,6 +7,26 @@ import type { CreateResult } from "@/lib/types";
 import { api, errorMessage, jsonRequest } from "./api";
 import { CategoryPicker } from "./CategoryPicker";
 
+function uploadDirect(url:string,method:string,file:File,onProgress:(percent:number)=>void):Promise<void> {
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open(method,url);
+    xhr.timeout=240_000;
+    xhr.setRequestHeader("Content-Type",file.type||"application/octet-stream");
+    xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(Math.round(event.loaded/event.total*100));};
+    xhr.onload=()=>{
+      if(xhr.status>=200&&xhr.status<300) resolve();
+      else {
+        let message="No pudimos subir el archivo. Intenta de nuevo.";
+        try {const data=JSON.parse(xhr.responseText);message=data.error||data.message||message;} catch {}
+        reject(new Error(message));
+      }
+    };
+    xhr.onerror=()=>reject(new Error("No pudimos conectar. Revisa tu conexión e intenta de nuevo."));
+    xhr.ontimeout=()=>reject(new Error("La subida tardó demasiado. Intenta de nuevo."));
+    xhr.send(file);
+  });
+}
 type FileResult = Partial<CreateResult> & { fileName: string; ok: boolean; error?: string };
 
 function ResultMessage({ result }: { result: FileResult }) {
@@ -25,6 +45,7 @@ export function UploadCard({ categories, onChanged }: { categories: CategoryNode
   const [files, setFiles] = useState<File[]>([]);
   const [results, setResults] = useState<FileResult[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState("");
   const [dragging, setDragging] = useState(false);
   const [ids, setIds] = useState<number[]>([]);
   const [publish, setPublish] = useState(false);
@@ -51,14 +72,23 @@ export function UploadCard({ categories, onChanged }: { categories: CategoryNode
       for (const [index, file] of files.entries()) {
         const rejected = localResults[index];
         if (rejected) { completed.push(rejected); continue; }
-        // Cada solicitud cabe en el límite del rewrite, incluso al seleccionar varios archivos.
-        const form = new FormData();
-        form.append("files", file);
-        form.append("categoryIds", JSON.stringify(ids));
-        if (publish) form.append("publicar", "si");
         try {
-          const response = await api<{ results: FileResult[] }>("/api/admin/documents", { method: "POST", body: form });
-          completed.push(response.results[0] || { fileName: file.name, ok: false, error: "No recibimos el resultado de este archivo. Intenta de nuevo." });
+          setProgress(`${index + 1}/${files.length} · Preparando ${file.name}…`);
+          const ticket = await api<{uploadUrl?:string;path:string;method?:string;local?:boolean}>("/api/admin/uploads",
+            jsonRequest("POST",{fileName:file.name,size:file.size,mime:file.type}));
+          if (ticket.uploadUrl) {
+            await uploadDirect(ticket.uploadUrl,ticket.method||"PUT",file,percent=>setProgress(`${index+1}/${files.length} · ${file.name} · ${percent} % subido`));
+            setProgress(`${index+1}/${files.length} · Leyendo e indexando ${file.name}…`);
+            const result=await api<CreateResult>("/api/admin/documents/ingest",jsonRequest("POST",{path:ticket.path,fileName:file.name,categoryIds:ids,publicar:publish}));
+            completed.push({...result,fileName:file.name,ok:true});
+          } else if (ticket.local) {
+            const form=new FormData(); form.append("files",file); form.append("categoryIds",JSON.stringify(ids));
+            if (publish) form.append("publicar","si");
+            const response=await api<{results:FileResult[]}>("/api/admin/documents",{method:"POST",body:form});
+            completed.push(response.results[0]||{fileName:file.name,ok:false,error:"No recibimos el resultado de este archivo. Intenta de nuevo."});
+          } else {
+            throw new Error("No recibimos una dirección de subida. Intenta de nuevo.");
+          }
         } catch (error) {
           completed.push({ fileName: file.name, ok: false, error: errorMessage(error) });
         }
@@ -69,7 +99,7 @@ export function UploadCard({ categories, onChanged }: { categories: CategoryNode
       if (fileInput.current) fileInput.current.value = "";
     } catch (error) {
       setResults(localResults.map((result, i) => result || { fileName: files[i].name, ok: false, error: errorMessage(error) }));
-    } finally { setUploading(false); uploadingRef.current = false; }
+    } finally { setUploading(false); setProgress(""); uploadingRef.current = false; }
   }
   async function importUrl(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -106,7 +136,7 @@ export function UploadCard({ categories, onChanged }: { categories: CategoryNode
             <ul className="max-h-36 space-y-1 overflow-y-auto text-sm text-muted">{files.map((file, i) => <li key={`${file.name}-${i}`} className="break-words">{file.name} · {formatBytes(file.size)}</li>)}</ul>
             <button type="button" className="btn btn-primary mt-3" disabled={uploading} onClick={uploadFiles}>{uploading ? "Procesando archivos…" : `Cargar ${files.length} ${files.length === 1 ? "archivo" : "archivos"}`}</button>
           </div>}
-          <div aria-live="polite" aria-atomic="true" className="mt-3">{uploading && <p className="hint">Estamos leyendo e indexando cada archivo. Puede tardar un momento.</p>}<ul className="space-y-2">{results.map((result, i) => <ResultMessage key={i} result={result} />)}</ul></div>
+          <div aria-live="polite" aria-atomic="true" className="mt-3">{uploading && <p className="hint">{progress || "Estamos leyendo e indexando cada archivo. Puede tardar un momento."}</p>}<ul className="space-y-2">{results.map((result, i) => <ResultMessage key={i} result={result} />)}</ul></div>
         </div>
         <div className="min-w-0 border-t border-line pt-6 md:border-t-0 md:border-l md:pt-0 md:pl-7">
           <h3 className="mb-3 flex items-start gap-2 font-semibold"><Link2 size={18} className="mt-0.5 shrink-0" aria-hidden="true" /> Importar desde una dirección oficial</h3>

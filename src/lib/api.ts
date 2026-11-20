@@ -15,7 +15,7 @@ async function getJson<T>(path: string, cookieHeader?: string): Promise<T> {
     response = await fetch(`${base}${path}`, {
       cache: "no-store",
       headers: { Accept: "application/json", ...(cookieHeader ? { Cookie: cookieHeader } : {}) },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(90_000),
     });
   } catch {
     throw new BackendError();

@@ -9,6 +9,7 @@ import { CategoriesTab } from "./CategoriesTab";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DocumentEditor } from "./DocumentEditor";
 import { DocumentList, EmptyDocuments } from "./DocumentList";
+import { StoragePanel } from "./StoragePanel";
 import { UploadCard } from "./UploadCard";
 
 type Library = { documents: DocumentSummary[]; stats: { approved: number; total: number; pending: number; chunks: number; categories: number }; facets: { entities: string[]; docTypes: string[] } };
@@ -87,6 +88,7 @@ export function AdminPanel() {
           { label: "Fragmentos indexados", value: stats?.chunks, hint: "De documentos aprobados" },
         ].map((stat) => <div key={stat.label} className="card min-w-0 p-4 sm:p-5"><p className="text-sm leading-snug text-muted">{stat.label}</p>{stat.value === undefined ? <div className="skeleton my-3 h-9 w-14" aria-label="Cargando cifra" /> : <p className="mt-2 font-display text-3xl text-forest-900">{stat.value.toLocaleString("es-CO")}</p>}<p className="mt-2 text-xs leading-relaxed text-muted">{stat.hint}</p></div>)}
       </div>
+      <StoragePanel revision={revision} onChanged={refresh} />
       <div aria-live="polite" className="mt-5 space-y-3">{notice && <p className="notice notice-info">{notice}</p>}{actionError && <p className="notice notice-error" role="alert">{actionError}</p>}{sessionExpired && <div className="notice notice-error flex-wrap"><p>Tu sesión terminó. Ingresa de nuevo para continuar.</p><button className="btn btn-secondary btn-sm" onClick={() => router.refresh()}>Volver a iniciar sesión</button></div>}</div>
       <div role="tablist" aria-label="Secciones de administración" className="mt-8 flex gap-2 border-b border-line">
         {tabs.map((item, index) => <button key={item.id} ref={(element) => { tabRefs.current[index] = element; }} type="button" role="tab" id={`tab-${item.id}`} aria-selected={tab === item.id} aria-controls={`panel-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => tabKey(event, index)} className={`border-b-2 px-5 py-4 text-sm font-semibold transition-colors ${tab === item.id ? "border-forest-700 text-forest-800" : "border-transparent text-muted hover:bg-forest-50"}`}>{item.label}</button>)}
