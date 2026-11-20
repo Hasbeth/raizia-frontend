@@ -350,7 +350,7 @@ export function AssistantMessage({
               {copied ? "Copiado" : "Copiar respuesta"}
             </button>
             <p className="text-xs text-faint">
-              Respuesta generada por IA local{meta.model ? ` (${meta.model})` : ""}. Verifica siempre
+              Respuesta generada por IA{meta.model ? ` (${meta.model})` : ""}. Verifica siempre
               en la fuente.
             </p>
           </div>

@@ -130,8 +130,8 @@ export default async function Home() {
           <li className="flex items-start gap-3">
             <Lock size={18} className="mt-0.5 shrink-0 text-clay" />
             <span className="text-ink/85">
-              <strong className="font-semibold text-ink">Tu consulta se queda aquí.</strong> La
-              inteligencia artificial funciona en este equipo.
+              <strong className="font-semibold text-ink">No pedimos tu nombre ni tus datos.</strong> Tu
+              consulta se envía a un servicio de inteligencia artificial (Gemini) solo para redactar la respuesta.
             </span>
           </li>
         </ul>
