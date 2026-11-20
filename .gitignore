@@ -47,3 +47,7 @@ next-env.d.ts
 # Comprobaciones locales
 /.cache/
 /.verification/
+
+.vercel
+.env*
+!.env.example
