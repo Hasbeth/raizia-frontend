@@ -48,3 +48,9 @@ Las consultas de servidor usan `cache: "no-store"`. Si el backend no responde, a
 Para comprobar el frontend: `npx tsc --noEmit`, `npx eslint` y `npm run build`. Las pruebas de lógica e importaciones se ejecutan en el backend.
 
 `node_modules/`, `.next/`, `data/` y `.env*` no se versionan; `.env.example` sí se conserva. El frontend no necesita una carpeta de datos ni contraseñas de administración o claves de Gemini.
+
+## Voz y app instalable
+
+- **Escuchar y dictar:** `src/lib/speech.ts` y `src/lib/dictation.ts`. El dictado solo aparece si el navegador lo admite y nunca envía el texto solo.
+- **PWA:** `src/app/manifest.ts`, `public/sw.js` y la página `/sin-conexion`. Al cambiar esa página o los íconos, sube `VERSION` en `sw.js`. El service worker nunca guarda `/api`, `/admin` ni navegaciones.
+- **Encabezados de seguridad:** se definen en `next.config.ts`.
