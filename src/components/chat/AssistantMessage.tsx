@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   BookOpenText,
@@ -12,10 +12,13 @@ import {
   RotateCcw,
   SearchX,
   TriangleAlert,
+  Volume2,
+  Square,
 } from "lucide-react";
 import type { ChatMeta, ChatSource } from "@/lib/constants";
 import { formatDate } from "@/lib/constants";
 import { LogoMark } from "@/components/Logo";
+import { speakAnswer, supportsSpeech, subscribeSpeechSupport } from "@/lib/speech";
 
 export type ChatMessage = {
   id: string;
@@ -78,10 +81,17 @@ export function AssistantMessage({
   const { meta, status, content, error } = message;
   const [copied, setCopied] = useState(false);
   const [flash, setFlash] = useState<number | null>(null);
+  const [reading, setReading] = useState(false);
+  const stopRef = useRef<(() => void) | null>(null);
+  const canSpeak = useSyncExternalStore(subscribeSpeechSupport, supportsSpeech, () => false);
+  useEffect(() => () => stopRef.current?.(), []);
   const sources = meta?.sources || [];
   const valid = new Set(sources.map((s) => s.n));
   const streaming = status === "buscando" || status === "redactando";
   const generative = meta?.mode === "ia" || meta?.mode === "conversacion";
+  const spokenText = content || (meta?.mode === "sin_resultados"
+    ? "No encontré información. Intenta contarme más sobre lo que pasa."
+    : sources.map(s => `${s.title}. ${s.heading}. ${s.excerpt}`).join(" "));
 
   const goToSource = (n: number) => {
     const el = document.getElementById(`${message.id}-f${n}`);
@@ -341,6 +351,21 @@ export function AssistantMessage({
             </span>
             <span className="btn btn-primary btn-sm shrink-0 max-sm:hidden">Empezar</span>
           </Link>
+        )}
+
+        {!streaming && status !== "detenido" && !error && spokenText && canSpeak && (
+          <button type="button" aria-label={reading ? "Detener lectura" : "Escuchar respuesta"}
+            aria-pressed={reading} className="btn btn-ghost mt-3 !min-h-11 !min-w-11 text-forest-700"
+            onClick={() => {
+              if (reading) stopRef.current?.();
+              else {
+                setReading(true);
+                stopRef.current = speakAnswer(spokenText, () => setReading(false));
+              }
+            }}>
+            {reading ? <Square size={17} /> : <Volume2 size={17} />}
+            {reading ? "Detener" : "Escuchar"}
+          </button>
         )}
 
         {!streaming && meta?.mode === "ia" && content && (

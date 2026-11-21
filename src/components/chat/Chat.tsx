@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, History, MessageSquarePlus, Square, Trash2, UsersRound, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ArrowUp, History, MessageSquarePlus, Mic, Square, Trash2, UsersRound, X } from "lucide-react";
 import { suggestedQuestions } from "@/brand/brand";
-import type { ChatEvent } from "@/lib/constants";
+import { readChatStream } from "@/lib/chat-stream";
+import { stopSpeaking, subscribeSpeechSupport } from "@/lib/speech";
+import { recognitionConstructor, supportsDictation, type Recognition } from "@/lib/dictation";
 import { LogoMark } from "@/components/Logo";
 import { AssistantMessage, type ChatMessage } from "./AssistantMessage";
 import { loadProfile, profileLabel, ProfileStep, saveProfile, type Profile } from "./ProfileStep";
@@ -46,6 +48,12 @@ export function Chat() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
+  const canDictate = useSyncExternalStore(subscribeSpeechSupport, supportsDictation, () => false);
+  const recognitionRef = useRef<Recognition | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   // undefined = aún no se ha leído; null = la persona todavía no responde.
@@ -60,8 +68,72 @@ export function Chat() {
   const started = useRef(false);
   const profileRef = useRef<Profile | null>(null);
   const pendingQuestion = useRef("");
-  messagesRef.current = messages;
-  activeRef.current = activeId;
+  useEffect(() => {
+    messagesRef.current = messages;
+    activeRef.current = activeId;
+  }, [messages, activeId]);
+
+  const cancelDictation = useCallback(() => {
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    if (recognition) {
+      recognition.onresult = recognition.onend = recognition.onerror = null;
+      recognition.abort();
+    }
+    setListening(false);
+    setVoiceStatus("");
+  }, []);
+
+  const dictate = () => {
+    if (recognitionRef.current) { recognitionRef.current.stop(); return; }
+    const Recognition = recognitionConstructor();
+    if (!Recognition || busy) return;
+    stopSpeaking();
+    try {
+      if (!window.localStorage.getItem("raizia.aviso-voz.v1")) {
+        setVoiceNotice(true);
+        window.localStorage.setItem("raizia.aviso-voz.v1", "1");
+      }
+    } catch { setVoiceNotice(true); }
+    const recognition = new Recognition();
+    recognition.lang = "es-CO";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = event => {
+      const words: string[] = [];
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) words.push(event.results[i][0].transcript);
+      }
+      if (words.length) {
+        setInput(previous => [previous.trim(), words.join(" ").trim()].filter(Boolean).join(" "));
+        setVoiceStatus("Revisa el texto. Toca enviar cuando esté listo.");
+      }
+    };
+    recognition.onerror = () => setVoiceStatus("No pude escuchar. Puedes escribir tu pregunta.");
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setListening(false);
+      inputRef.current?.focus();
+    };
+    recognitionRef.current = recognition;
+    setListening(true);
+    setVoiceStatus("");
+    try { recognition.start(); }
+    catch {
+      cancelDictation();
+      setVoiceStatus("No pude escuchar. Puedes escribir tu pregunta.");
+    }
+  };
+
+  useEffect(() => {
+    const leave = () => {
+      stopSpeaking();
+      cancelDictation();
+      abortRef.current?.abort();
+    };
+    window.addEventListener("pagehide", leave);
+    return () => { window.removeEventListener("pagehide", leave); leave(); };
+  }, [cancelDictation]);
 
   /* Historial de la sesión (se guarda solo en este navegador). */
   const persist = useCallback((id: string, msgs: ChatMessage[]) => {
@@ -88,6 +160,8 @@ export function Chat() {
     async (raw: string) => {
       const text = raw.trim();
       if (!text || abortRef.current) return;
+      stopSpeaking();
+      cancelDictation();
       const convId = activeRef.current || uid();
       if (!activeRef.current) setActiveId(convId);
 
@@ -97,13 +171,27 @@ export function Chat() {
       const userMsg: ChatMessage = { id: uid(), role: "user", content: text };
       const botMsg: ChatMessage = { id: uid(), role: "assistant", content: "", status: "buscando" };
       setMessages((prev) => [...prev, userMsg, botMsg]);
-      setInput("");
+      setInput(text);
       setBusy(true);
       stick.current = true;
 
       const controller = new AbortController();
       abortRef.current = controller;
       let failed = "";
+      let keepQuestion = false;
+      let connectionLost = false;
+      let slowTimer: ReturnType<typeof setTimeout>;
+      let timeout: ReturnType<typeof setTimeout>;
+      const activity = () => {
+        clearTimeout(slowTimer);
+        clearTimeout(timeout);
+        setSlow(false);
+        slowTimer = setTimeout(() => setSlow(true), 15_000);
+        timeout = setTimeout(() => { connectionLost = true; controller.abort(); }, 60_000);
+      };
+      const offline = () => { connectionLost = true; controller.abort(); };
+      window.addEventListener("offline", offline);
+      activity();
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -111,59 +199,64 @@ export function Chat() {
           body: JSON.stringify({ message: text, history, profile: profileRef.current }),
           signal: controller.signal,
         });
-        if (!res.ok || !res.body) throw new Error("respuesta no válida");
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let pending = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          pending += decoder.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = pending.indexOf("\n")) >= 0) {
-            const line = pending.slice(0, nl);
-            pending = pending.slice(nl + 1);
-            if (!line.trim()) continue;
-            const ev = JSON.parse(line) as ChatEvent;
+        if (res.status === 429) {
+          const body = await res.json().catch(() => null);
+          keepQuestion = true;
+          if (abortRef.current === controller) patchLast(m => ({ ...m,
+            content: typeof body?.message === "string" ? body.message : "Hay muchas consultas en este momento. Espera un momento y vuelve a preguntar.",
+            meta: { type: "meta", mode: "conversacion", topics: [], sources: [] },
+          }));
+        } else {
+          if (!res.ok || !res.body) throw new Error("respuesta no válida");
+          await readChatStream(res.body, ev => {
+            if (abortRef.current !== controller) return;
             if (ev.type === "meta") {
-              patchLast((m) => ({ ...m, meta: ev, status: ev.mode === "ia" || ev.mode === "conversacion" ? "redactando" : "listo" }));
+              patchLast((m) => ({ ...m, meta: ev, status: "redactando" }));
             } else if (ev.type === "token") {
               patchLast((m) => ({ ...m, content: m.content + ev.text }));
             } else if (ev.type === "error") {
+              failed = ev.message;
               patchLast((m) => ({ ...m, error: ev.message }));
             }
-          }
+          }, activity);
         }
       } catch {
-        if (!controller.signal.aborted) {
-          failed = "No fue posible comunicarse con RAIZIA. Revisa que la aplicación siga en ejecución e inténtalo de nuevo.";
+        if (!controller.signal.aborted || connectionLost) {
+          failed = "Se perdió la conexión o está muy lenta. Tu pregunta sigue aquí. Intenta de nuevo.";
         }
       } finally {
-        const stopped = controller.signal.aborted;
-        abortRef.current = null;
-        setBusy(false);
-        setMessages((prev) => {
-          const next = prev.map((m, i) =>
-            i === prev.length - 1
-              ? {
-                  ...m,
-                  status: stopped ? ("detenido" as const) : ("listo" as const),
-                  error: failed || m.error,
-                  meta:
-                    m.meta ||
-                    (stopped || failed
-                      ? undefined
-                      : { type: "meta" as const, mode: "sin_resultados" as const, topics: [], sources: [] }),
-                }
-              : m,
-          );
-          persist(convId, next);
-          return next;
-        });
-        inputRef.current?.focus();
+        clearTimeout(slowTimer!);
+        clearTimeout(timeout!);
+        window.removeEventListener("offline", offline);
+        if (abortRef.current === controller) {
+          const stopped = controller.signal.aborted;
+          abortRef.current = null;
+          setBusy(false);
+          setSlow(false);
+          if (!failed && !stopped && !keepQuestion) setInput(previous => previous === text ? "" : previous);
+          setMessages((prev) => {
+            const next = prev.map((m, i) =>
+              i === prev.length - 1
+                ? {
+                    ...m,
+                    status: stopped ? ("detenido" as const) : ("listo" as const),
+                    error: failed || m.error,
+                    meta:
+                      m.meta ||
+                      (stopped || failed
+                        ? undefined
+                        : { type: "meta" as const, mode: "sin_resultados" as const, topics: [], sources: [] }),
+                  }
+                : m,
+            );
+            persist(convId, next);
+            return next;
+          });
+          inputRef.current?.focus();
+        }
       }
     },
-    [persist],
+    [persist, cancelDictation],
   );
 
   /* Carga inicial: historial, estado de la IA y consulta enviada desde el inicio. */
@@ -213,7 +306,11 @@ export function Chat() {
   };
 
   const changeProfile = () => {
+    stopSpeaking();
+    cancelDictation();
     abortRef.current?.abort();
+    abortRef.current = null;
+    setBusy(false);
     saveProfile(null);
     profileRef.current = null;
     setProfile(null);
@@ -223,7 +320,11 @@ export function Chat() {
   };
 
   const newChat = () => {
+    stopSpeaking();
+    cancelDictation();
     abortRef.current?.abort();
+    abortRef.current = null;
+    setBusy(false);
     setMessages([]);
     setActiveId(null);
     setDrawer(false);
@@ -231,7 +332,11 @@ export function Chat() {
   };
 
   const openConversation = (c: Conversation) => {
+    stopSpeaking();
+    cancelDictation();
     abortRef.current?.abort();
+    abortRef.current = null;
+    setBusy(false);
     setMessages(c.messages);
     setActiveId(c.id);
     setDrawer(false);
@@ -489,10 +594,18 @@ export function Chat() {
                   void send(input);
                 }
               }}
-              disabled={!profile}
+              disabled={!profile || busy || listening}
               placeholder={profile === null ? "Responde primero la pregunta de arriba…" : "Escribe tu consulta…"}
               className="max-h-42 min-h-11 flex-1 resize-none bg-transparent px-3.5 py-2.5 leading-relaxed text-ink placeholder:text-faint focus:outline-none disabled:cursor-not-allowed"
             />
+            {canDictate && !busy && (
+              <button type="button" onClick={dictate} disabled={!profile}
+                aria-label={listening ? "Detener micrófono" : "Dictar pregunta"} aria-pressed={listening}
+                className="btn btn-secondary !min-h-11 !min-w-11 shrink-0 !px-3">
+                {listening ? <Square size={18} /> : <Mic size={18} />}
+                <span className="max-sm:sr-only">{listening ? "Detener" : "Dictar"}</span>
+              </button>
+            )}
             {busy ? (
               <button
                 type="button"
@@ -505,7 +618,7 @@ export function Chat() {
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim() || !profile}
+                disabled={!input.trim() || !profile || listening}
                 aria-label="Enviar consulta"
                 className="btn btn-primary btn-icon !min-h-11 !w-11 shrink-0"
               >
@@ -513,6 +626,9 @@ export function Chat() {
               </button>
             )}
           </form>
+          {voiceNotice && <p className="mx-auto mt-2 max-w-3xl text-sm text-muted">Tu navegador puede usar un servicio externo para convertir tu voz en texto.</p>}
+          {(listening || voiceStatus) && <p role="status" className="mx-auto mt-2 max-w-3xl text-sm text-forest-700">{listening ? "Te escucho. Habla y luego revisa el texto." : voiceStatus}</p>}
+          {busy && slow && <p role="status" className="mx-auto mt-2 max-w-3xl text-sm text-muted">La respuesta está tardando. Tu pregunta sigue aquí.</p>}
           <p className="mx-auto mt-2 max-w-3xl px-2 text-center text-xs leading-snug text-faint">
             Orientación general basada en documentos oficiales. No reemplaza la asesoría de un
             profesional del derecho.

@@ -5,6 +5,7 @@ import "@fontsource-variable/instrument-sans/wght.css";
 import "./globals.css";
 import { brand } from "@/brand/brand";
 import { Header } from "@/components/Header";
+import { ServiceWorker } from "@/components/ServiceWorker";
 
 export const metadata: Metadata = {
   title: { default: `${brand.name} · ${brand.tagline}`, template: `%s · ${brand.name}` },
@@ -22,6 +23,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="es-CO" className="h-full antialiased">
       <body className="flex min-h-full flex-col">
         <Header />
+        <ServiceWorker />
         {children}
       </body>
     </html>

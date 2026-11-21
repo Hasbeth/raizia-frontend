@@ -16,6 +16,7 @@ import {
   Volume2,
 } from "lucide-react";
 import { LogoMark } from "@/components/Logo";
+import { speak } from "@/lib/speech";
 import type { Route } from "@/lib/types";
 import { RouteCards } from "./RouteCards";
 import {
@@ -34,22 +35,6 @@ type Probe = { original: string; questions: string[]; kind: "hechos" | "peticion
 
 function hasValue(v: string | string[] | undefined): boolean {
   return Array.isArray(v) ? v.length > 0 : !!String(v ?? "").trim();
-}
-
-/** Lee un texto en voz alta con las voces del propio equipo (no usa internet). */
-function speak(text: string) {
-  try {
-    const synth = window.speechSynthesis;
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    const voice = synth.getVoices().find((v) => v.lang.toLowerCase().startsWith("es"));
-    if (voice) u.voice = voice;
-    u.lang = voice?.lang || "es-CO";
-    u.rate = 0.92;
-    synth.speak(u);
-  } catch {
-    /* el navegador no puede leer en voz alta */
-  }
 }
 
 function Bot({ children, text }: { children: React.ReactNode; text?: string }) {
