@@ -1,5 +1,5 @@
 /** Modelo común para vista previa y Word. Citas comprobadas en staging (scripts/verificar-citas-herramientas.mjs). */
-import { TOOLS, type ToolData } from "./tools-config";
+import { TOOLS, noEvidence, type ToolData } from "./tools-config";
 export type DocumentSection = { id: string; title: string; paragraphs: string[] };
 export type DocumentModel = { title: string; date: string; addressee: string[]; reference: string[]; intro: string; sections: DocumentSection[]; signature: string[]; missing: string[]; email: string };
 export const value = (v: unknown): string => (Array.isArray(v) ? v.join("\n") : String(v ?? "")).trim();
@@ -21,14 +21,15 @@ const enumerate = (items: string[], feminine = false) => items.map((s, i) => `${
 const take = (d: ToolData, key: string, label: string) => entries(d[key]).length ? entries(d[key]) : [gap(label)];
 const petitionLaw = "Artículo 23 de la Constitución Política y Ley 1755 de 2015: derecho a presentar peticiones respetuosas y obtener respuesta de fondo.";
 const tutelaLaw = "Artículo 86 de la Constitución Política y Decreto 2591 de 1991: protección de derechos fundamentales.";
-function requests(d: ToolData, key: string, judicial: boolean): string[] {
+function requests(d: ToolData, key: string, judicial: boolean, defaultResponsible = "", withoutEvidence = false): string[] {
   return enumerate(take(d, key, "qué solicito").map((text, i) => {
     if (!judicial) return text;
-    const at = (key: string, label: string) => entries(d[key])[i] || gap(`${label} del pedido ${i + 1}`);
+    const at = (key: string, label: string) => entries(d[key])[i] || (key === "responsables" ? defaultResponsible : key === "pruebasApoyo" && withoutEvidence ? value(d.pruebas) : "") || gap(`${label} del pedido ${i + 1}`);
     return `${text}\nResponsable: ${at("responsables", "responsable")}. Plazo solicitado: ${at("plazos", "plazo")}. Verificación del cumplimiento: ${at("verificaciones", "cómo comprobar el cumplimiento")}.\nHechos de apoyo: ${at("hechosApoyo", "números de los hechos")}. Pruebas de apoyo: ${at("pruebasApoyo", "números de las pruebas")}.`;
   }), true);
 }
-function evidence(d: ToolData): string[] {
+function evidence(d: ToolData, allowNone = false): string[] {
+  if (allowNone && noEvidence(d)) return [value(d.pruebas)];
   return enumerate(take(d, "pruebas", "pruebas disponibles o indicar que no cuento con ellas").map((p, i) => `${p}. Demuestra: ${entries(d.demuestra)[i] || gap(`qué demuestra la prueba ${i + 1}`)}.`));
 }
 function notifications(d: ToolData, judicial: boolean): string[] {
@@ -42,17 +43,19 @@ export function buildModel(kind: string, d: ToolData, now = new Date()): Documen
   const judicial = config.group === "acciones" && kind !== "grupo";
   const name = value(d.nombre) ? value(d.nombre).toUpperCase() : gap("nombre completo");
   const capacity = field(d, "calidad", "calidad en que actúo");
-  const identity = `${name}, ${field(d, "edadDeclarada", "indicar si soy mayor o menor de edad")}, identificado(a) con ${field(d, "tipoDocumento", "tipo de documento")} número ${field(d, "numeroDocumento", "número de documento")}, actuando ${capacity.toLowerCase()}${value(d.comunidad) ? `, por ${value(d.comunidad)}` : ""}`;
+  const age = kind === "tutela" && !value(d.edadDeclarada) ? "" : `, ${field(d, "edadDeclarada", "indicar si soy mayor o menor de edad")}`;
+  const identity = `${name}${age}, identificado(a) con ${field(d, "tipoDocumento", "tipo de documento")} número ${field(d, "numeroDocumento", "número de documento")}, actuando ${capacity.toLowerCase()}${value(d.comunidad) && (kind !== "tutela" || capacity !== "En nombre propio") ? `, por ${value(d.comunidad)}` : ""}`;
   const sections: DocumentSection[] = [];
   const add = (id: string, title: string, paragraphs: string[]) => sections.push({ id, title: `${roman[sections.length]}. ${title}`, paragraphs });
   const facts = () => add("hechos", "HECHOS", enumerate(take(d, "hechos", "hechos con fechas, lugar y consecuencias")));
   const annexes = () => add("anexos", "ANEXOS", take(d, "anexos", "lista exacta de anexos o indicar que no adjunto documentos"));
-  const proofs = () => add("pruebas", "PRUEBAS", evidence(d));
+  const proofs = () => add("pruebas", "PRUEBAS", evidence(d, kind === "tutela"));
   const notify = () => add("notificaciones", "NOTIFICACIONES", notifications(d, judicial));
   const legal = (texts: string[]) => add("fundamentos", "FUNDAMENTOS DE DERECHO", texts);
   let intro = `Yo, ${identity}, respetuosamente presento ${config.name.toLowerCase()} con base en los hechos y solicitudes que expongo a continuación.`;
   let addressee = judicial ? ["Señor(a) JUEZ (REPARTO)", field(d, "lugarHechos", "municipio donde ocurrió la vulneración"), "E. S. D."] : [field(d, "entidad", "entidad destinataria"), field(d, "funcionario", "dependencia destinataria"), field(d, "ciudadEntidad", "ciudad de la entidad")];
-  const reference = [`REFERENCIA: ${config.name.toUpperCase()}${kind === "peticion" ? ". ART. 23 C.P." : kind === "tutela" ? " (Art. 86 C.P.)" : ""}`, `ASUNTO: ${field(d, "asunto", "resumen de lo que solicito")}`];
+  const subject = value(d.asunto) || (kind === "tutela" ? entries(d.pretensiones)[0] : "");
+  const reference = [`REFERENCIA: ${config.name.toUpperCase()}${kind === "peticion" ? ". ART. 23 C.P." : kind === "tutela" ? " (Art. 86 C.P.)" : ""}`, `ASUNTO: ${subject || gap("resumen de lo que solicito")}`];
   if (judicial) reference.push(`Accionante: ${name}`, `Accionado: ${field(d, "accionado", "parte accionada")}`);
   if (["desacato", "impugnacion"].includes(kind)) {
     addressee = [field(d, "juzgado", "juzgado que dictó el fallo"), "E. S. D."];
@@ -67,18 +70,18 @@ export function buildModel(kind: string, d: ToolData, now = new Date()): Documen
     if (value(d.consideraciones)) add("consideraciones", "CONSIDERACIONES", entries(d.consideraciones));
     annexes(); notify();
   } else if (kind === "tutela") {
-    if (!/^En nombre propio$/i.test(capacity)) reference.push(`Representación o agencia oficiosa: ${field(d, "representacion", "a quién represento y por qué no puede actuar directamente")}`);
+    if (!/^En nombre propio$/i.test(capacity)) reference.push(`Persona o comunidad representada: ${field(d, "comunidad", "a nombre de quién presento la tutela")}`);
     facts();
     add("procedencia", "PROCEDENCIA", [
-      `Legitimación por activa: actúo ${capacity.toLowerCase()}. ${value(d.representacion) || (/^En nombre propio$/i.test(capacity) ? "Solicito la protección de mis derechos." : gap("fundamento de la representación o agencia oficiosa"))}`,
-      `Legitimación por pasiva: dirijo esta acción contra ${field(d, "accionado", "responsable")}. Su relación con los hechos y su capacidad para cumplir lo solicitado son: ${field(d, "relacionAccionado", "qué hizo o dejó de hacer la entidad y qué puede resolver")}.`,
-      `Inmediatez: los hechos ocurrieron ${field(d, "cuando", "cuándo ocurrieron los hechos")}. Acudo ahora porque ${field(d, "motivoAhora", "por qué acudo ahora")}.`,
-      `Subsidiariedad: gestiones y respuestas previas: ${field(d, "actuaciones", "gestiones previas o explicar por qué no fue posible hacerlas")}. Otros medios de defensa y por qué no bastan: ${field(d, "otrosMedios", "otros caminos disponibles y su eficacia en este caso")}.`,
-      `Perjuicio irremediable: ${field(d, "peligro", "peligro si espero o indicar que no solicito protección transitoria")}.`,
-      `Especial protección: ${field(d, "proteccionEspecial", "situación de especial protección, si aplica, o indicar que no aplica")}.`,
+      `Legitimación por activa: actúo ${capacity.toLowerCase()}. ${/^En nombre propio$/i.test(capacity) ? "Solicito la protección de mis derechos." : `A nombre de: ${field(d, "comunidad", "persona o comunidad representada")}. ${field(d, "representacion", "fundamento de la representación o agencia oficiosa")}`}`,
+      `Legitimación por pasiva: dirijo esta acción contra ${field(d, "accionado", "responsable")}. Relato sobre la afectación: ${value(d.relacionAccionado) || field(d, "hechos", "qué hizo o dejó de hacer la parte accionada")}.`,
+      `Inmediatez: fecha y continuidad de la afectación según mi respuesta: ${field(d, "cuando", "cuándo pasó y si sigue pasando")}.${value(d.motivoAhora) ? ` Motivo para acudir ahora: ${value(d.motivoAhora)}.` : ""}`,
+      `Subsidiariedad: gestiones, respuestas y posibilidad de obtener una solución según lo informado: ${field(d, "actuaciones", "gestiones previas o por qué no fue posible hacerlas y si hay otro camino eficaz")}.${value(d.otrosMedios) ? ` Otros medios de defensa: ${value(d.otrosMedios)}.` : ""}`,
+      `Perjuicio irremediable: ${value(d.peligro) || (d.medidaProvisional === "No" ? "Respondí que no hay peligro para mi vida o mi salud si espero." : d.medidaProvisional === "Sí" ? `Respondí que hay peligro para mi vida o mi salud si espero. ${field(d, "razonMedida", "por qué no puedo esperar")}` : gap("si hay peligro al esperar"))}.`,
+      ...(value(d.proteccionEspecial) ? [`Especial protección: ${value(d.proteccionEspecial)}.`] : []),
     ]);
-    add("derechos", "DERECHOS VULNERADOS", [...take(d, "derechos", "derechos afectados"), ...entries(d.otroDerecho), `Afectación: ${field(d, "explicacion", "cómo afectan los hechos a cada derecho")}`]);
-    add("pretensiones", "PRETENSIONES", requests(d, "pretensiones", true));
+    add("derechos", "DERECHOS VULNERADOS", [...take(d, "derechos", "derechos afectados"), ...entries(d.otroDerecho), `Afectación relatada: ${value(d.explicacion) || field(d, "hechos", "cómo afectan los hechos a cada derecho")}`]);
+    add("pretensiones", "PRETENSIONES", requests(d, "pretensiones", true, value(d.accionado), noEvidence(d)));
     if (value(d.medidaProvisional) === "Sí") add("medida", "MEDIDA PROVISIONAL", [`Con fundamento en el artículo 7 del Decreto 2591 de 1991, solicito: ${field(d, "medida", "medida urgente concreta")}. No puede esperar porque: ${field(d, "razonMedida", "razón de la urgencia y prueba que la respalda")}.`]);
     legal([tutelaLaw]); proofs();
     add("competencia", "COMPETENCIA", [`Solicito conocer de esta acción conforme al artículo 37 del Decreto 2591 de 1991. La vulneración o amenaza ocurrió en ${field(d, "lugarHechos", "lugar de los hechos para establecer competencia")}.`]);

@@ -1,9 +1,10 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { buildModel } from "@/lib/document-model";
 import { reviewQuality } from "@/lib/tools-quality";
-import { TOOLS, type ToolData } from "@/lib/tools-config";
+import { TOOLS, stepApplies, type ToolData } from "@/lib/tools-config";
+import { ToolFields } from "./ToolFields";
 import { JOURNEY } from "@/lib/tools-journey";
 import { addBusinessDays, deadlineDays } from "@/lib/tools-deadlines";
 
@@ -12,6 +13,14 @@ function Marked({ text }: { text: string }) {
 }
 export function DocumentReview({ kind, data, onChange, editField }: { kind: string; data: ToolData; onChange: (next: ToolData) => void; editField: (field: string) => void }) {
   const config = TOOLS[kind];
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const optionalFields = config.steps.filter(step => step.optionalDetails).flatMap(step => step.fields);
+  const editAnswer = (name: string) => {
+    if (optionalFields.some(field => field.name === name)) {
+      if (detailsRef.current) detailsRef.current.open = true;
+      document.getElementById(`dato-${name}`)?.focus();
+    } else editField(name);
+  };
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -42,8 +51,9 @@ export function DocumentReview({ kind, data, onChange, editField }: { kind: stri
       <p className="eyebrow">Revisamos contigo</p><h2 id="revision-calidad" className="mt-2 text-2xl text-forest-900">Antes de preparar tu documento</h2>
       <p className={`mt-4 rounded-xl border p-4 font-semibold ${quality.level === "red" ? "border-red-300 bg-red-50 text-red-900" : quality.level === "amber" ? "border-amber-300 bg-amber-50 text-amber-950" : "border-forest-300 bg-forest-50 text-forest-900"}`} role="status">{quality.level === "red" ? "Rojo · faltan respuestas obligatorias" : quality.level === "amber" ? "Amarillo · hay puntos para revisar" : "Verde · no encontramos datos pendientes"}</p>
       <p className="mt-3 text-sm text-muted">Es una ayuda para revisar, no una decisión sobre tu caso. Los avisos amarillos permiten continuar.</p>
-      <details className="mt-3"><summary className="min-h-11 cursor-pointer py-3 font-semibold">Revisar mis respuestas</summary>{config.steps.map(step => <div key={step.id} className="my-3"><h3 className="text-lg text-forest-900">{step.title}</h3><div className="mt-2 grid gap-2">{step.fields.map(field => <button key={field.name} type="button" className="btn btn-secondary !justify-start !text-left" onClick={() => editField(field.name)}>Cambiar: {field.label}</button>)}</div></div>)}</details>
-      <ul className="mt-4 space-y-2">{quality.issues.map((issue, i) => <li key={i} className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-2"><span className="flex-1">{issue.message}</span>{issue.field && <button type="button" onClick={() => editField(issue.field)} className="btn btn-secondary">Revisar</button>}</li>)}</ul>
+      <details className="mt-3"><summary className="min-h-11 cursor-pointer py-3 font-semibold">Revisar mis respuestas</summary>{config.steps.filter(step => !step.optionalDetails && stepApplies(step, data)).map(step => <div key={step.id} className="my-3"><h3 className="text-lg text-forest-900">{step.title}</h3><div className="mt-2 grid gap-2">{step.fields.map(field => <button key={field.name} type="button" className="btn btn-secondary !justify-start !text-left" onClick={() => editAnswer(field.name)}>Cambiar: {field.label}</button>)}</div></div>)}</details>
+      {optionalFields.length > 0 && <details ref={detailsRef} className="mt-4"><summary className="min-h-11 cursor-pointer py-3 font-semibold">Agregar más detalles (opcional)</summary><p className="mb-4 text-sm text-muted">Completa solo lo que sabes. El plazo es el que tú pides; no se propone ninguno automáticamente.</p><ToolFields fields={optionalFields} data={data} onChange={(name, value) => onChange({ ...data, [name]: value })} /></details>}
+      <ul className="mt-4 space-y-2">{quality.issues.map((issue, i) => <li key={i} className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-2"><span className="flex-1">{issue.message}</span>{issue.field && <button type="button" onClick={() => editAnswer(issue.field)} className="btn btn-secondary">Revisar</button>}</li>)}</ul>
       {quality.missing.length > 0 && <details className="mt-4" open><summary className="min-h-11 cursor-pointer py-3 font-semibold">Datos por completar ({quality.missing.length})</summary><ul className="space-y-2">{quality.missing.map(item => <li key={item}><mark>{item}</mark></li>)}</ul></details>}
       {phase === "quality" && <button type="button" className="btn btn-primary mt-5" onClick={() => setPhase("preview")}>Ver y editar el documento</button>}
     </section>

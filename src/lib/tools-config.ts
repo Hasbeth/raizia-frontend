@@ -23,7 +23,7 @@ export type Field = {
   why?: string;
 };
 
-export type Step = { id: string; title: string; intro: string; fields: Field[] };
+export type Step = { id: string; title: string; intro: string; fields: Field[]; optionalDetails?: boolean; condition?: "urgente" | "representacion" };
 
 export type ToolConfig = {
   kind: string;
@@ -771,6 +771,81 @@ export function toolBySlug(slug: string): ToolConfig | undefined {
 
 export type ToolData = Record<string, string | string[]>;
 
+// Conserva el orden de la entrevista v2 para recuperar respuestas parciales antiguas.
+export const LEGACY_TUTELA_FIELDS = ["hechos", ...TUTELA.steps.flatMap(s => s.fields.map(f => f.name)).filter(name => name !== "hechos")];
+const tutelaFields = Object.fromEntries(TUTELA.steps.flatMap(s => s.fields).map(f => [f.name, f]));
+const shortField = (name: string, changes: Partial<Field> = {}): Field => ({ ...tutelaFields[name], ...changes });
+const shortStep = (id: string, title: string, fields: Field[], condition?: Step["condition"]): Step => ({ id, title, intro: "", fields, condition });
+TUTELA.steps = [
+  shortStep("hechos", "¿Qué pasó?", [shortField("hechos")]),
+  shortStep("accionado", "¿Quién te está afectando?", [shortField("accionado", { hint: "Escribe el nombre de la entidad o de la persona." })]),
+  shortStep("actuaciones", "¿Ya le pediste una solución? ¿Qué te respondieron?", [shortField("actuaciones", { required: true, hint: "Cuenta qué intentaste y la respuesta. Si no lo hiciste, di por qué. Si hay otro camino, explica si te puede ayudar a tiempo." })]),
+  shortStep("cuando", "¿Cuándo pasó y sigue pasando?", [shortField("cuando", { type: "textarea", required: true, hint: "Di la fecha que recuerdes y si el problema continúa. Si esperaste para pedir ayuda, cuenta por qué." })]),
+  shortStep("peligro", "¿Hay peligro para tu vida o tu salud si esperas?", [shortField("medidaProvisional", { required: true, options: ["No", "Sí"], hint: "Si dices Sí, podrás pedir una medida urgente mientras el juez decide." })]),
+  shortStep("medida", "¿Qué medida urgente necesitas y por qué no puedes esperar?", [shortField("medida", { required: true, label: "¿Qué necesitas que hagan ahora?", hint: "Escribe la medida urgente que pides." }), shortField("razonMedida", { required: true, label: "¿Por qué no puedes esperar?", hint: "Cuenta qué puede pasar si esperas y qué lo demuestra, si lo sabes." })], "urgente"),
+  shortStep("derechos", "¿Qué derechos te están afectando?", [shortField("derechos", { hint: "Las opciones marcadas por el relato son una SUGERENCIA. Puedes cambiarlas; confirma solo las que correspondan." })]),
+  shortStep("pretensiones", "¿Qué quieres que ordene el juez?", [shortField("pretensiones")]),
+  shortStep("pruebas", "¿Qué pruebas tienes?", [shortField("pruebas", { required: true, hint: "Haz una lista. Puedes escribir: ninguna por ahora." })]),
+  shortStep("persona", "Tu nombre completo", [shortField("nombre"), shortField("calidad", { options: [CAPACITY[0], CAPACITY[2], CAPACITY[1]] })]),
+  shortStep("representacion", "¿A nombre de quién presentas la tutela?", [shortField("comunidad", { required: true, label: "Nombre de la persona o comunidad", hint: "Escribe a quién representas." })], "representacion"),
+  shortStep("documento", "Tu documento", [shortField("numeroDocumento"), shortField("tipoDocumento")]),
+  shortStep("municipio", "¿En qué municipio estás?", [shortField("ciudad")]),
+  shortStep("contacto", "¿Dónde te avisamos?", [shortField("correo", { hint: "Basta un correo o un teléfono." }), shortField("telefono")]),
+];
+const essentialNames = new Set(TUTELA.steps.flatMap(s => s.fields.map(f => f.name)));
+TUTELA.steps.push({ id: "detalles", title: "Agregar más detalles (opcional)", intro: "Completa solo lo que sabes. Los datos pendientes se resaltarán en el borrador.", optionalDetails: true, fields: Object.values(tutelaFields).filter(f => !essentialNames.has(f.name)).map(f => ({ ...f, required: false })) });
+
+export function stepApplies(step: Step, data: ToolData): boolean {
+  if (step.condition === "urgente") return data.medidaProvisional === "Sí";
+  if (step.condition === "representacion") return !!data.calidad && data.calidad !== "En nombre propio";
+  return true;
+}
+
+export type InterviewQuestion = { field: Field; fields: Field[]; stepId: string; title?: string };
+export function interviewQuestions(config: ToolConfig, data: ToolData): InterviewQuestion[] {
+  if (config.kind === "tutela") return config.steps.filter(s => !s.optionalDetails && stepApplies(s, data)).map(s => ({ field: s.fields[0], fields: s.fields, stepId: s.id, title: s.title }));
+  const all = config.steps.flatMap(s => s.fields.map(field => ({ field, fields: [field], stepId: s.id })));
+  return [...all.filter(q => q.field.name === "hechos"), ...all.filter(q => q.field.name !== "hechos")];
+}
+
+export function tutelaDefaults(data: ToolData = {}): ToolData {
+  return { ...data, calidad: data.calidad || "En nombre propio", tipoDocumento: data.tipoDocumento || DOC_ID_TYPES[0] };
+}
+
+export function optionLabel(name: string, option: string): string {
+  if (name === "calidad") return option === CAPACITY[0] ? "Para mí" : option === CAPACITY[1] ? "Para mi comunidad" : "Para otra persona";
+  if (name !== "derechos") return option;
+  const simple = ["Vivir con dignidad", "Mi cultura y mi pueblo", "Mi vida", "Trato igual, sin discriminación", "Recibir respuesta a lo que pido", "Un proceso justo", "Mi seguridad social", "Mi salud", "Estudiar", "Que consulten a mi comunidad"];
+  return simple[RIGHTS.indexOf(option)] || option;
+}
+
+/** Solo preselección visible; nunca incorpora derechos al documento sin confirmar. */
+export function suggestRights(story: string): string[] {
+  const text = story.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const rules: [RegExp, number][] = [[/medic|\beps\b|salud|hospital|tratamiento/, 7], [/escuela|colegio|estudi|educa|matricula/, 8], [/discrimin|desigual/, 3], [/peticion|solicitud|no.*respond/, 4], [/consulta.*comunidad|consulta previa|no nos consultaron/, 9], [/amenaza.*vida|matar|riesgo.*vida/, 2]];
+  return rules.filter(([rule]) => rule.test(text)).map(([, index]) => RIGHTS[index]);
+}
+
+export function noEvidence(data: ToolData): boolean {
+  return /^(?:ningun[ao](?: por ahora)?|no (?:tengo|cuento con) pruebas(?: por ahora)?)[.!]?$/i.test(String(data.pruebas || "").trim());
+}
+
+/** Cambia índices v2 por pantallas estables sin perder campos ni texto sin enviar. */
+export function migrateTutelaDraft(saved: { version: number; data: ToolData; index: number; answer: string; picked: string[]; questionId?: string }) {
+  const data = tutelaDefaults(saved.data);
+  let name: string | undefined;
+  if (saved.version === 2) {
+    name = LEGACY_TUTELA_FIELDS[saved.index];
+    if (name && (saved.answer || saved.picked.length)) data[name] = name === "derechos" ? saved.picked : saved.answer;
+  }
+  const questions = interviewQuestions(TUTELA, data);
+  const mapped = questions.findIndex(q => saved.version === 2 ? q.fields.some(f => f.name === name) : q.stepId === saved.questionId);
+  // Si era un detalle opcional o la revisión, retoma la primera pantalla incompleta.
+  const incomplete = questions.findIndex(q => Object.keys(validateTool(TUTELA, data, q.stepId)).length > 0);
+  const index = mapped >= 0 ? mapped : incomplete >= 0 ? incomplete : questions.length;
+  return { ...saved, version: 3 as const, data, index, questionId: questions[index]?.stepId || "revision", answer: saved.version === 3 ? saved.answer : String(data[questions[index]?.field.name] || ""), picked: saved.version === 3 ? saved.picked : Array.isArray(data.derechos) && questions[index]?.field.name === "derechos" ? data.derechos : [] };
+}
+
 /* --------------------------- Entrevista conversacional --------------------------- */
 
 /**
@@ -853,6 +928,7 @@ export function validateTool(config: ToolConfig, data: ToolData, onlyStep?: stri
   const errors: Record<string, string> = {};
   for (const step of config.steps) {
     if (onlyStep && step.id !== onlyStep) continue;
+    if (!stepApplies(step, data)) continue;
     for (const f of step.fields) {
       const v = data[f.name];
       const empty = Array.isArray(v) ? v.every((x) => !String(x ?? "").trim()) : !String(v ?? "").trim();
@@ -865,8 +941,8 @@ export function validateTool(config: ToolConfig, data: ToolData, onlyStep?: stri
       }
     }
     if (step.id === "contacto") {
-      const any = ["direccion", "correo", "telefono"].some((k) => String(data[k] ?? "").trim());
-      if (!any) errors.direccion = "Indica al menos un medio de contacto.";
+      const any = (config.kind === "tutela" ? ["correo", "telefono"] : ["direccion", "correo", "telefono"]).some((k) => String(data[k] ?? "").trim());
+      if (!any) errors[config.kind === "tutela" ? "correo" : "direccion"] = "Indica al menos un medio de contacto.";
     }
   }
   return errors;

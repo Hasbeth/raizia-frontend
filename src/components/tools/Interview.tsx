@@ -18,6 +18,7 @@ import { entries } from "@/lib/document-model";
 import type { OrientationResult, Route } from "@/lib/types";
 import { RouteCards } from "./RouteCards";
 import { DocumentReview } from "./DocumentReview";
+import { ToolFields } from "./ToolFields";
 import { loadProfile } from "../chat/ProfileStep";
 import { clearToolDrafts, draftKey, readDraft, type SavedDraft } from "@/lib/tools-draft";
 import {
@@ -27,6 +28,11 @@ import {
   suggestEntities,
   TOOLS,
   validateTool,
+  interviewQuestions,
+  migrateTutelaDraft,
+  tutelaDefaults,
+  suggestRights,
+  optionLabel,
   type Field,
   type ToolData,
 } from "@/lib/tools-config";
@@ -66,15 +72,10 @@ function Bot({ children, text }: { children: React.ReactNode; text?: string }) {
 export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => void }) {
   const config = TOOLS[kind];
   const storageKey = draftKey(kind);
-  // La conversación empieza por el relato: es lo más natural y permite orientar después.
-  const questions = useMemo(() => {
-    const all = config.steps.flatMap((s) => s.fields.map((field) => ({ field, stepId: s.id })));
-    return [...all.filter((q) => q.field.name === "hechos"), ...all.filter((q) => q.field.name !== "hechos")];
-  }, [config]);
-
-  const [data, setData] = useState<ToolData>({});
+  const [data, setData] = useState<ToolData>(() => kind === "tutela" ? tutelaDefaults() : {});
+  const questions = useMemo(() => interviewQuestions(config, data), [config, data]);
   const [idx, setIdx] = useState(0);
-  const [resume, setResume] = useState<number | null>(null);
+  const [resume, setResume] = useState<number | "revision" | null>(null);
   const [draft, setDraft] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -88,6 +89,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   const [saved, setSaved] = useState<SavedDraft | null>(null);
   const [storageMessage, setStorageMessage] = useState("");
   const restoredAnswer = useRef<{ answer: string; picked: string[] } | null>(null);
+  const answerFor = useRef<string | null>(null);
   const requestEpoch = useRef(0);
   const pendingRequest = useRef<AbortController | null>(null);
   const [ready, setReady] = useState(false);
@@ -99,6 +101,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
 
   const done = idx >= questions.length;
   const current = done ? null : questions[idx];
+  const questionId = current?.stepId || "revision";
   useEffect(() => () => { requestEpoch.current++; pendingRequest.current?.abort(); }, []);
   useEffect(() => () => stopSpeaking(), [idx]);
   const request = (url: string, body: object) => {
@@ -121,23 +124,27 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   }, [kind]);
   useEffect(() => {
     if (!ready || saved) return;
+    // No guarda el texto de la pantalla anterior bajo la pregunta recién abierta.
+    if (kind === "tutela" && questionId !== "revision" && answerFor.current !== questionId) return;
     try {
-      if (!Object.keys(data).length && !draft && !picked.length && idx === 0) window.localStorage.removeItem(storageKey);
-      else window.localStorage.setItem(storageKey, JSON.stringify({ version: 2, kind, data, index: idx, answer: draft, picked }));
+      const answered = Object.keys(data).some(key => kind !== "tutela" || !["calidad", "tipoDocumento"].includes(key));
+      if (!answered && !draft && !picked.length && idx === 0) window.localStorage.removeItem(storageKey);
+      else window.localStorage.setItem(storageKey, JSON.stringify({ version: kind === "tutela" ? 3 : 2, kind, data, index: idx, questionId, answer: draft, picked }));
     } catch {
       const frame = window.requestAnimationFrame(() => setStorageMessage("No se pudo guardar el avance. Mantén esta página abierta."));
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [data, draft, picked, idx, kind, ready, saved, storageKey]);
+  }, [data, draft, picked, idx, kind, ready, saved, storageKey, questionId]);
 
   /* Al cambiar de pregunta: carga la respuesta previa y enfoca el campo. */
   useEffect(() => {
     if (!ready || !current || saved) return;
     const frame = window.requestAnimationFrame(() => {
       const prev = data[current.field.name];
+      answerFor.current = current.stepId;
       const restored = restoredAnswer.current;
       restoredAnswer.current = null;
-      setPicked(restored?.picked || (Array.isArray(prev) ? prev : []));
+      setPicked(restored?.picked || (Array.isArray(prev) ? prev : kind === "tutela" && current.field.name === "derechos" ? suggestRights(String(data.hechos || "")) : []));
       setDraft(
         restored ? restored.answer : typeof prev === "string" && prev
           ? prev
@@ -162,6 +169,18 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
 
   const advance = (next: ToolData) => {
     const q = questions[idx];
+    if (kind === "tutela") {
+      const nextQuestions = interviewQuestions(config, next);
+      const position = nextQuestions.findIndex(question => question.stepId === q.stepId);
+      // Tras editar una respuesta en revisión, muestra cualquier condicional nueva.
+      const pendingConditional = nextQuestions.findIndex(question => {
+        const step = config.steps.find(s => s.id === question.stepId);
+        return step?.condition && question.fields.some(f => !hasValue(next[f.name]));
+      });
+      setIdx(resume === "revision" ? pendingConditional >= 0 ? pendingConditional : nextQuestions.length : position + 1);
+      if (!(resume === "revision" && pendingConditional >= 0)) setResume(null);
+      return;
+    }
     const lastOfStep = idx === questions.length - 1 || questions[idx + 1].stepId !== q.stepId;
     if (q.stepId === "contacto" && lastOfStep && validateTool(config, next, "contacto").direccion) {
       setError("Necesito al menos una forma de contactarte: dirección, correo o teléfono.");
@@ -169,7 +188,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
       return;
     }
     if (resume !== null) {
-      setIdx(resume);
+      setIdx(resume === "revision" ? questions.length : resume);
       setResume(null);
     } else {
       let following = idx + 1;
@@ -217,6 +236,12 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     const epoch = requestEpoch.current;
     const f = current.field;
     const value = Array.isArray(raw) ? raw : raw.trim();
+    if (kind === "tutela" && current.fields.length > 1) {
+      const next = { ...data, [f.name]: value };
+      const errors = validateTool(config, next, current.stepId);
+      if (Object.keys(errors).length) { setError(Object.values(errors)[0]); return; }
+      setError(""); accept(value); return;
+    }
     if (!hasValue(value)) {
       if (f.required) {
         setError(f.type === "checkboxes" ? "Toca al menos una opción para continuar." : "Necesito este dato para continuar.");
@@ -234,6 +259,8 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     setError("");
     const organize = typeof value === "string" ? organizeKind(f.name) : null;
     if (organize && typeof value === "string" && value !== data[f.name]) {
+      // Tutela conserva la propuesta aceptada, sin sumar preguntas al camino corto.
+      if (kind === "tutela") { await draftNarrative(value, organize); return; }
       // 1. ¿Falta algo importante? La IA puede hacer hasta dos preguntas de seguimiento.
       setWorking(true);
       try {
@@ -288,14 +315,14 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   };
 
   const edit = (i: number) => {
-    setResume(done ? questions.length : Math.max(idx, i));
+    setResume(done ? "revision" : Math.max(idx, i));
     setIdx(i);
   };
 
   const restart = () => {
     stopSpeaking();
     requestEpoch.current++; pendingRequest.current?.abort(); setWorking(false);
-    setData({}); setDraft(""); setPicked([]); setSaved(null); setError("");
+    setData(kind === "tutela" ? tutelaDefaults() : {}); setDraft(""); setPicked([]); setSaved(null); setError("");
     setProposal(null); setProbe(null); setRedirect(null); story.current = ""; triaged.current = "";
     restoredAnswer.current = null;
     try { clearToolDrafts(window.localStorage); clearToolDrafts(window.sessionStorage); window.sessionStorage.removeItem("raizia.relato"); }
@@ -304,13 +331,15 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   };
   const resumeSaved = () => {
     if (!saved) return;
-    restoredAnswer.current = { answer: saved.answer, picked: saved.picked };
-    setData(saved.data); setIdx(Math.min(saved.index, questions.length)); setDraft(saved.answer); setPicked(saved.picked); setSaved(null);
+    const restored = kind === "tutela" ? migrateTutelaDraft(saved) : saved;
+    restoredAnswer.current = { answer: restored.answer, picked: restored.picked };
+    setData(restored.data); setIdx(Math.min(restored.index, interviewQuestions(config, restored.data).length)); setDraft(restored.answer); setPicked(restored.picked); setSaved(null);
   };
   const stages = questions.flatMap((q, i) => i === 0 || q.stepId !== questions[i - 1].stepId ? [i] : []);
   const stage = done ? stages.length + 1 : stages.filter(i => i <= idx).length;
-  const progress = Math.round(stage / (stages.length + 1) * 100);
+  const progress = kind === "tutela" ? Math.round(Math.min(idx + 1, questions.length) / questions.length * 100) : Math.round(stage / (stages.length + 1) * 100);
   const field: Field | undefined = current?.field;
+  const prompt = current?.title || (field ? askFor(field) : "");
   const multiline = field?.type === "textarea";
   const entityHints =
     field && field.type === "text" && (field.name === "entidad" || field.name === "accionado")
@@ -333,13 +362,13 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
         )}
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted">{storageMessage || "Tu avance queda en este dispositivo."}</p><button type="button" onClick={restart} className="btn btn-secondary">Borrar mis datos</button></div>
-      <p className="mt-4 text-sm font-semibold text-forest-700">Etapa {stage} de {stages.length + 1} · {done ? "Revisión y documento" : config.steps.find(s => s.id === current?.stepId)?.title}</p>
-      <div className="mt-4 flex items-center gap-3" role="progressbar" aria-label="Avance por etapas" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+      <p className="mt-4 text-sm font-semibold text-forest-700">{kind !== "tutela" && `Etapa ${stage} de ${stages.length + 1} · `}{done ? "Revisión y documento" : config.steps.find(s => s.id === current?.stepId)?.title}</p>
+      <div className="mt-4 flex items-center gap-3" role="progressbar" aria-label={kind === "tutela" ? "Avance por preguntas" : "Avance por etapas"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
         <div className="h-2 flex-1 overflow-hidden rounded-full bg-line">
           <div className="h-full rounded-full bg-forest-600 transition-[width] duration-500" style={{ width: `${progress}%` }} />
         </div>
         <span className="text-sm font-medium text-muted tabular-nums">
-          {Math.min(idx + (done ? 0 : 1), questions.length)} de {questions.length}
+          {kind === "tutela" && (done ? "Completadas " : "Pregunta ")}{Math.min(idx + (done ? 0 : 1), questions.length)} de {questions.length}
         </span>
       </div>
 
@@ -376,8 +405,8 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
         {/* Pregunta actual */}
         {ready && !saved && field && !redirect && (
           <div key={`q-${idx}`} className="space-y-4">
-            <Bot text={canSpeak ? askFor(field) : undefined}>
-              <p>{askFor(field)}</p>
+            <Bot text={canSpeak ? prompt : undefined}>
+              <p>{prompt}</p>
               {field.hint && <p className="mt-1.5 text-[0.9375rem] text-muted">{field.hint}</p>}
               <p className="mt-3 text-sm text-muted">Ejemplo: {field.example || field.placeholder || (field.name === "hechos" ? "El [fecha], pedí [qué] a [entidad] en [lugar]. Me respondió [respuesta]. Esto me afecta en [consecuencia]." : field.type === "select" || field.type === "checkboxes" ? field.options?.[0] : "Escribe solo lo que sabes. Si falta un dato, puedes decir que no lo recuerdas.")}</p>
               <details className="mt-2"><summary className="min-h-11 cursor-pointer py-3 font-semibold">¿Por qué te pregunto esto?</summary><p className="text-sm">{field.why || (current?.stepId === "procedencia" ? "El juez necesita entender por qué buscas su ayuda ahora y si otro camino puede protegerte a tiempo." : current?.stepId === "persona" ? "Estos datos permiten identificar a quien presenta y firma el documento." : current?.stepId === "contacto" ? "Aquí recibirás la respuesta. Basta un medio de contacto." : "Tu respuesta ayuda a explicar y apoyar lo que pides. Si falta, se señalará para que puedas completarlo.")}</p></details>
@@ -419,6 +448,11 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                   </button>
                 </div>
               </div>
+            ) : current && current.fields.length > 1 ? (
+              <form className="space-y-4 sm:pl-[2.6rem]" onSubmit={e => { e.preventDefault(); void submit(draft); }}>
+                <ToolFields fields={current.fields} data={{ ...data, [field.name]: draft }} disabled={working} onChange={(name, value) => { if (name === field.name) setDraft(value); else setData(previous => ({ ...previous, [name]: value })); setError(""); }} />
+                <button type="submit" className="btn btn-primary w-full" disabled={working}>Continuar</button>
+              </form>
             ) : field.type === "select" ? (
               <div className="grid gap-2.5 sm:pl-[2.6rem]">
                 {field.options!.map((o) => (
@@ -438,6 +472,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
               </div>
             ) : field.type === "checkboxes" ? (
               <div className="space-y-2.5 sm:pl-[2.6rem]">
+                {kind === "tutela" && field.name === "derechos" && <p className="rounded-xl bg-amber-50 p-4 text-amber-950">SUGERENCIA según tu relato. Revisa lo marcado, cambia lo que necesites y confirma tu elección.</p>}
                 {field.options!.map((o) => {
                   const on = picked.includes(o);
                   return (
@@ -460,12 +495,12 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                       >
                         {on && <Check size={15} />}
                       </span>
-                      {o}
+                      {kind === "tutela" ? optionLabel(field.name, o) : o}
                     </button>
                   );
                 })}
                 <button type="button" onClick={() => submit(picked)} className="btn btn-primary !min-h-12 w-full">
-                  Continuar
+                  {kind === "tutela" && field.name === "derechos" ? "Confirmar estos derechos" : "Continuar"}
                 </button>
               </div>
             ) : (
@@ -577,7 +612,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                 </button>
               </div>
             )}
-            {!proposal && !probe && !field.required && (
+            {!proposal && !probe && !field.required && current?.fields.length === 1 && (
               <div className="sm:pl-[2.6rem]">
                 <button type="button" onClick={() => accept(field.type === "checkboxes" ? [] : "")} className="btn btn-ghost btn-sm text-muted">
                   <SkipForward size={15} />
@@ -588,7 +623,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
           </div>
         )}
 
-        {ready && !saved && done && <DocumentReview kind={kind} data={data} onChange={setData} editField={name => { const i = questions.findIndex(q => q.field.name === name); if (i >= 0) edit(i); }} />}
+        {ready && !saved && done && <DocumentReview kind={kind} data={data} onChange={setData} editField={name => { const i = questions.findIndex(q => q.fields.some(f => f.name === name)); if (i >= 0) edit(i); }} />}
         <div ref={endRef} className="h-2" />
       </div>
     </div>
