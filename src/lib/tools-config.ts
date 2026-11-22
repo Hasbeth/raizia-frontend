@@ -19,6 +19,8 @@ export type Field = {
   /** Ocupa media fila en pantallas anchas. */
   half?: boolean;
   rows?: number;
+  example?: string;
+  why?: string;
 };
 
 export type Step = { id: string; title: string; intro: string; fields: Field[] };
@@ -53,6 +55,8 @@ const CAPACITY = [
   "En nombre propio",
   "Como autoridad o representante de una comunidad",
   "En representación de otra persona",
+  "Como agente oficioso de alguien que no puede defenderse",
+  "Como apoderado de otra persona",
 ];
 
 const FACTS_HINT = "Cuenta solo lo que sabes que ocurrió. RAIZIA ordena tus palabras, pero no agrega hechos.";
@@ -662,6 +666,90 @@ export const GRUPO: ToolConfig = {
   ],
 };
 
+const detail = (name: string, label: string, hint: string, required = false): Field => ({ name, label, hint, required, type: "textarea", rows: 3 });
+const judgmentStep: Step = {
+  id: "fallo", title: "La decisión del juez", intro: "Ten a mano el fallo y el aviso de que lo recibiste.",
+  fields: [
+    { name: "juzgado", label: "¿Qué juzgado dictó el fallo?", type: "text", required: true },
+    { name: "radicado", label: "¿Cuál es el número del caso?", type: "text", required: true, hint: "Se llama radicado. Cópialo del fallo." },
+    { name: "fechaFallo", label: "¿Qué fecha tiene el fallo?", type: "text", required: true },
+    { name: "fechaNotificacion", label: "¿Cuándo te notificaron el fallo?", type: "text", required: true, hint: "Usa año-mes-día, por ejemplo 2026-11-20. Es la fecha en que te comunicaron la decisión." },
+    { name: "accionado", label: "¿Contra qué entidad o persona fue la tutela?", type: "text", required: true },
+    { name: "contactoAccionado", label: "¿Conoces su dirección o correo judicial?", type: "text" },
+  ],
+};
+export const DESACATO: ToolConfig = {
+  kind: "desacato", slug: "incidente-de-desacato", group: "acciones", name: "Incidente de desacato",
+  short: "Ya hay una orden de tutela y no la cumplen.", description: "Pide al juzgado que haga cumplir la orden que ya dio. La sanción depende de lo que el juez compruebe.",
+  badge: "Necesitas un fallo que ordene protegerte", minutes: 15, fileName: "Incidente-de-desacato",
+  steps: [personStep("¿Quién pide el cumplimiento?"), judgmentStep, factsStep("Cuenta lo ocurrido después del fallo, con fechas."), {
+    id: "incumplimiento", title: "Lo que falta por cumplir", intro: "Compara la orden con lo que hizo la entidad.", fields: [
+      detail("ordenFallo", "¿Qué ordenó el juez y en qué plazo?", "Copia la orden exacta del fallo.", true),
+      detail("cumplido", "¿Qué parte sí cumplieron?", "Di cuándo. Si no cumplieron nada, escríbelo."),
+      detail("incumplido", "¿Qué parte sigue sin cumplirse?", "Di qué falta y desde cuándo.", true),
+      detail("actuaciones", "¿Qué has pedido desde el fallo y qué respondieron?", "Cuenta las gestiones y sus fechas."),
+      detail("peligro", "¿Qué riesgo hay mientras no cumplen?", "Cuenta solo lo que te ocurre."),
+      detail("tercero", "¿La entidad dice que otro debe hacerlo?", "Si culpa a un operador u otro tercero, copia lo que dijo."),
+      detail("peticiones", "¿Necesitas pedir algo más para hacer cumplir el fallo?", "Se propondrán las solicitudes de cumplimiento para que las revises."), EVIDENCE, ATTACHMENTS,
+    ],
+  }, contactStep], warnings: [DRAFT_WARNING, "Presenta el incidente ante el juzgado que conoció la tutela en primera instancia. No sirve para cambiar lo que ordenó el fallo."], confirmations: [DRAFT],
+};
+export const IMPUGNACION: ToolConfig = {
+  kind: "impugnacion", slug: "impugnacion-de-tutela", group: "acciones", name: "Impugnación del fallo de tutela",
+  short: "Pide que otro juez revise el fallo.", description: "Sirve para explicar con qué parte del fallo no estás de acuerdo y pedir su revisión en segunda instancia.",
+  badge: "3 días desde la notificación", minutes: 15, fileName: "Impugnacion-de-tutela",
+  steps: [personStep("¿Quién pide la revisión?"), judgmentStep, factsStep("Resume los hechos que el juez debe revisar."), {
+    id: "inconformidad", title: "Lo que debe revisar otro juez", intro: "No necesitas palabras difíciles. Explica tu desacuerdo.", fields: [
+      detail("decisionFallo", "¿Qué decidió el fallo?", "Copia o resume la decisión.", true),
+      detail("desacuerdo", "¿Con qué parte no estás de acuerdo?", "Señala la parte de la decisión.", true),
+      detail("razones", "¿Por qué no estás de acuerdo?", "Relaciona tus razones con los hechos y pruebas.", true),
+      detail("peticiones", "¿Qué le pides al juez que revisará el fallo?", "Di qué decisión pides cambiar, revocar o completar.", true), EVIDENCE, ATTACHMENTS,
+    ],
+  }, contactStep], warnings: [DRAFT_WARNING, "El artículo 31 del Decreto 2591 de 1991 da 3 días siguientes a la notificación para impugnar. Preséntala ante el juzgado que dictó el fallo; no esperes a que venza el plazo. La impugnación no suspende su cumplimiento."], confirmations: [DRAFT],
+};
+
+// Datos que evitan afirmaciones supuestas y permiten órdenes verificables.
+for (const tool of [PETICION, CONSULTA_PREVIA, RECLAMACION, ACOMPANAMIENTO, TUTELA, POPULAR, CUMPLIMIENTO, GRUPO, DESACATO, IMPUGNACION]) {
+  const person = tool.steps.find(s => s.id === "persona")!;
+  person.fields.push({ name: "edadDeclarada", label: "¿Eres mayor o menor de edad?", type: "select", options: ["Mayor de edad", "Menor de edad"] });
+  person.fields.push({ name: "asunto", label: "En una frase, ¿qué necesitas resolver?", type: "text", example: "Pedir copia de un documento." });
+  for (const step of tool.steps) if (step.fields.some(f => f.name === "pruebas")) step.fields.push(detail("demuestra", "¿Qué demuestra cada prueba?", "Una línea por prueba, en el mismo orden. Ejemplo: la carta demuestra que pedí una respuesta."));
+  if (["tutela", "popular", "cumplimiento"].includes(tool.kind)) {
+    if (tool.kind !== "tutela") tool.steps.find(s => s.id === "hechos")!.fields.push({ name: "lugarHechos", label: "¿En qué municipio ocurrió?", type: "text" });
+    const claims = tool.steps.find(s => s.fields.some(f => f.name === "pretensiones"))!;
+    claims.fields.push(
+      detail("responsables", "¿Quién debe cumplir cada pedido?", "Una línea por pedido, en el mismo orden."),
+      detail("plazos", "¿En cuánto tiempo pides que cumplan cada pedido?", "Una línea por pedido. Es tu solicitud; el juez decide el plazo."),
+      detail("verificaciones", "¿Cómo sabrás que cumplieron cada pedido?", "Una línea por pedido. Ejemplo: recibir el documento solicitado."),
+      detail("hechosApoyo", "¿Qué hechos apoyan cada pedido?", "Escribe los números de los hechos. Una línea por pedido. Ejemplo: 1, 2."),
+      detail("pruebasApoyo", "¿Qué pruebas apoyan cada pedido?", "Escribe los números de las pruebas. Una línea por pedido. Ejemplo: 1."),
+    );
+  }
+}
+TUTELA.steps.splice(3, 0, {
+  id: "procedencia", title: "Por qué necesitas ayuda del juez", intro: "Estas respuestas explican por qué la tutela puede servirte.", fields: [
+    detail("representacion", "Si actúas por alguien más, ¿por qué no puede hacerlo esa persona?", "Di a quién representas y cómo estás autorizado. Si actúas por ti, puedes saltar."),
+    detail("relacionAccionado", "¿Qué hizo o dejó de hacer esa entidad?", "Explica qué puede hacer para resolverlo."),
+    { name: "lugarHechos", label: "¿En qué municipio ocurrió?", type: "text" },
+    { name: "cuando", label: "¿Cuándo pasó?", type: "text", hint: "Indica la fecha o lo más cercano que recuerdes." },
+    detail("motivoAhora", "¿Por qué buscas ayuda del juez ahora?", "Si pasó tiempo, explica por qué esperaste."),
+    detail("otrosMedios", "¿Hay otro camino para resolverlo? ¿Por qué no basta?", "Puedes decir que no lo sabes. No inventes trámites."),
+    detail("peligro", "¿Hay peligro si esperas?", "Explica qué puede pasar y por qué es urgente; si no hay peligro, dilo."),
+    detail("proteccionEspecial", "¿Hay algo de tu situación que requiera más cuidado?", "Por ejemplo: niñez, edad avanzada, discapacidad, pertenencia a un pueblo étnico o enfermedad grave. Si no aplica, dilo."),
+    { name: "medidaProvisional", label: "¿Necesitas una orden urgente mientras el juez decide?", type: "select", options: ["No", "Sí"], hint: "Se llama medida provisional. Solo pídela si no puedes esperar al fallo." },
+    detail("medida", "Si pediste una orden urgente, ¿qué debe hacerse?", "Si respondiste No, puedes saltar."),
+    detail("razonMedida", "¿Por qué esa orden no puede esperar?", "Indica también qué prueba muestra la urgencia. Si no pediste la medida, salta."),
+  ],
+});
+PETICION.steps.find(s => s.id === "peticiones")!.fields.push(detail("consideraciones", "¿Quieres explicar algo más sobre lo que pides?", "Es opcional. No agregues hechos que no conozcas."));
+PETICION.steps.find(s => s.id === "peticiones")!.fields.push({ name: "peticionesAdicionales", label: "¿Quieres incluir alguno de estos pedidos?", type: "checkboxes", options: [
+  "Que se responda de fondo y por separado cada petición.",
+  "Que se entregue constancia de radicación y se informe el estado del trámite.",
+  "Que se informe si falta un documento para poder completarlo.",
+  "Que se notifique la respuesta por el medio de contacto indicado.",
+] });
+for (const tool of [CONSULTA_PREVIA, ACOMPANAMIENTO]) tool.steps.find(s => s.id === "peticiones")!.fields.unshift({ ...PETICION.steps.find(s => s.id === "peticiones")!.fields.find(f => f.name === "tipoPeticion")!, required: false });
+
 export const TOOL_LIST: ToolConfig[] = [
   PETICION,
   CONSULTA_PREVIA,
@@ -671,6 +759,8 @@ export const TOOL_LIST: ToolConfig[] = [
   POPULAR,
   CUMPLIMIENTO,
   GRUPO,
+  DESACATO,
+  IMPUGNACION,
 ];
 
 export const TOOLS: Record<string, ToolConfig> = Object.fromEntries(TOOL_LIST.map((t) => [t.kind, t]));
@@ -706,7 +796,7 @@ const ASKS: Record<string, string> = {
   telefono: "¿Cuál es tu número de teléfono?",
   accionado: "¿Contra quién es? Escribe el nombre de la entidad, empresa o persona.",
   contactoAccionado: "¿Sabes la dirección o el correo de esa entidad o persona?",
-  actuaciones: "¿Ya hiciste algo para resolverlo? Por ejemplo, una carta, una queja o una reunión. Cuéntame qué pasó.",
+  actuaciones: "¿Ya le pediste esto a la entidad? ¿Qué te respondió?",
   derechos: "¿Qué derechos crees que se están afectando? Puedes tocar varios.",
   otroDerecho: "¿Hay otro derecho que no está en la lista? Escríbelo.",
   explicacion: "¿Cómo te afecta esto a ti o a tu comunidad?",
@@ -745,6 +835,8 @@ export function suggestTool(message: string): { slug: string; name: string } | n
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase();
   const rules: [RegExp, ToolConfig][] = [
+    [/desacato|(?:tutela|fallo).*(?:no cumplen|incumpl)|ganamos.*tutela/, DESACATO],
+    [/impugna|(?:fallo|tutela).*(?:no estoy de acuerdo|negaron)/, IMPUGNACION],
     [/\btutela\b/, TUTELA],
     [/consulta previa|sin consultar|sin preguntar|no nos consultaron|no nos preguntaron/, CONSULTA_PREVIA],
     [/no (se )?cumple|incumpl|accion de cumplimiento/, CUMPLIMIENTO],

@@ -16,6 +16,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { NeedFinder } from "@/components/tools/NeedFinder";
 import { TOOL_LIST, type ToolConfig } from "@/lib/tools-config";
 
 export const metadata: Metadata = {
@@ -77,13 +78,14 @@ export default function HerramientasPage() {
     <div className="container-page pt-12 pb-8 md:pt-16">
       <header className="max-w-3xl">
         <p className="eyebrow">Herramientas jurídicas</p>
-        <h1 className="mt-3 text-4xl text-forest-900 md:text-5xl">Prepara tu documento, paso a paso</h1>
+        <h1 className="mt-3 text-4xl text-forest-900 md:text-5xl">¿Qué necesitas resolver?</h1>
         <p className="mt-4 text-lg leading-relaxed text-muted">
           Responde unas preguntas sencillas y descarga un borrador en Word que puedes revisar,
           ajustar e imprimir. Tú pones los hechos; RAIZIA organiza el documento.
         </p>
       </header>
 
+      <NeedFinder />
       <Link
         href="/herramientas/orientacion"
         className="group mt-9 flex flex-col gap-5 rounded-[1.75rem] bg-forest-800 p-6 text-paper transition-colors hover:bg-forest-700 sm:flex-row sm:items-center md:p-8"

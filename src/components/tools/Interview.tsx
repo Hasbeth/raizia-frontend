@@ -6,19 +6,19 @@ import {
   ArrowLeft,
   ArrowUp,
   Check,
-  CircleCheck,
-  Download,
   ListChecks,
   LoaderCircle,
   Pencil,
   SkipForward,
-  TriangleAlert,
   Volume2,
 } from "lucide-react";
 import { LogoMark } from "@/components/Logo";
-import { speak } from "@/lib/speech";
+import { speak, stopSpeaking } from "@/lib/speech";
+import { entries } from "@/lib/document-model";
 import type { Route } from "@/lib/types";
 import { RouteCards } from "./RouteCards";
+import { DocumentReview } from "./DocumentReview";
+import { clearToolDrafts, draftKey, readDraft, type SavedDraft } from "@/lib/tools-draft";
 import {
   askFor,
   ENTITY_REASSURANCE,
@@ -50,7 +50,7 @@ function Bot({ children, text }: { children: React.ReactNode; text?: string }) {
             <button
               type="button"
               onClick={() => speak(text)}
-              className="mt-1 inline-flex min-h-9 items-center gap-1.5 rounded-full px-2.5 text-sm font-medium text-forest-700 hover:bg-forest-50"
+              className="mt-1 inline-flex min-h-11 items-center gap-1.5 rounded-full px-2.5 text-sm font-medium text-forest-700 hover:bg-forest-50"
             >
               <Volume2 size={16} />
               Escuchar
@@ -64,7 +64,7 @@ function Bot({ children, text }: { children: React.ReactNode; text?: string }) {
 
 export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => void }) {
   const config = TOOLS[kind];
-  const storageKey = `raizia.borrador.${kind}`;
+  const storageKey = draftKey(kind);
   // La conversación empieza por el relato: es lo más natural y permite orientar después.
   const questions = useMemo(() => {
     const all = config.steps.flatMap((s) => s.fields.map((field) => ({ field, stepId: s.id })));
@@ -83,9 +83,11 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   // Caminos sugeridos cuando el relato no corresponde a esta herramienta.
   const [redirect, setRedirect] = useState<Route[] | null>(null);
   const triaged = useRef("");
-  const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
-  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [message, setMessage] = useState("");
+  const [saved, setSaved] = useState<SavedDraft | null>(null);
+  const [storageMessage, setStorageMessage] = useState("");
+  const restoredAnswer = useRef<{ answer: string; picked: string[] } | null>(null);
+  const requestEpoch = useRef(0);
+  const pendingRequest = useRef<AbortController | null>(null);
   const [ready, setReady] = useState(false);
   const [canSpeak, setCanSpeak] = useState(false);
 
@@ -95,52 +97,47 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
 
   const done = idx >= questions.length;
   const current = done ? null : questions[idx];
+  useEffect(() => () => { requestEpoch.current++; pendingRequest.current?.abort(); }, []);
+  useEffect(() => () => stopSpeaking(), [idx]);
+  const request = (url: string, body: object) => {
+    pendingRequest.current?.abort();
+    const controller = new AbortController(); pendingRequest.current = controller;
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: controller.signal });
+  };
 
-  /* Borrador de la pestaña, comunidad indicada en el asistente y relato traído del chat. */
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      let initial: ToolData = {};
       try {
-        const raw = window.sessionStorage.getItem(storageKey);
-        if (raw) initial = JSON.parse(raw);
-        else {
-          const perfil = JSON.parse(window.localStorage.getItem("raizia.perfil.v1") || "null");
-          const comunidad = [perfil?.community, perfil?.territory].filter(Boolean).join(", ");
-          if (comunidad) initial = { comunidad };
-        }
+        setSaved(readDraft(window.localStorage, kind));
         story.current = window.sessionStorage.getItem("raizia.relato") || "";
         window.sessionStorage.removeItem("raizia.relato");
-      } catch {
-        /* sin almacenamiento */
-      }
-      setData(initial);
-      // Retoma en la primera pregunta obligatoria sin respuesta.
-      const firstPending = questions.findIndex((q) => q.field.required && !hasValue(initial[q.field.name]));
-      const start = Object.keys(initial).length > 1 ? (firstPending < 0 ? questions.length : firstPending) : 0;
-      setIdx(start);
+      } catch { setStorageMessage("No se puede guardar en este navegador. Mantén esta página abierta."); }
       setCanSpeak("speechSynthesis" in window);
       setReady(true);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [storageKey, questions]);
-
+  }, [kind]);
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || saved) return;
     try {
-      window.sessionStorage.setItem(storageKey, JSON.stringify(data));
+      if (!Object.keys(data).length && !draft && !picked.length && idx === 0) window.localStorage.removeItem(storageKey);
+      else window.localStorage.setItem(storageKey, JSON.stringify({ version: 2, kind, data, index: idx, answer: draft, picked }));
     } catch {
-      /* sin almacenamiento */
+      const frame = window.requestAnimationFrame(() => setStorageMessage("No se pudo guardar el avance. Mantén esta página abierta."));
+      return () => window.cancelAnimationFrame(frame);
     }
-  }, [data, ready, storageKey]);
+  }, [data, draft, picked, idx, kind, ready, saved, storageKey]);
 
   /* Al cambiar de pregunta: carga la respuesta previa y enfoca el campo. */
   useEffect(() => {
-    if (!ready || !current) return;
+    if (!ready || !current || saved) return;
     const frame = window.requestAnimationFrame(() => {
       const prev = data[current.field.name];
-      setPicked(Array.isArray(prev) ? prev : []);
+      const restored = restoredAnswer.current;
+      restoredAnswer.current = null;
+      setPicked(restored?.picked || (Array.isArray(prev) ? prev : []));
       setDraft(
-        typeof prev === "string" && prev
+        restored ? restored.answer : typeof prev === "string" && prev
           ? prev
           : current.field.name === "hechos" && story.current
             ? story.current
@@ -155,11 +152,11 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     return () => window.cancelAnimationFrame(frame);
     // Solo debe ejecutarse al cambiar de pregunta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, ready]);
+  }, [idx, ready, saved]);
 
   useEffect(() => {
     if (proposal || probe || redirect || done) endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [proposal, probe, redirect, done, state]);
+  }, [proposal, probe, redirect, done]);
 
   const advance = (next: ToolData) => {
     const q = questions[idx];
@@ -173,7 +170,12 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
       setIdx(resume);
       setResume(null);
     } else {
-      setIdx(idx + 1);
+      let following = idx + 1;
+      while (following < questions.length && (
+        (["medida", "razonMedida"].includes(questions[following].field.name) && next.medidaProvisional !== "Sí") ||
+        (questions[following].field.name === "representacion" && next.calidad === "En nombre propio")
+      )) following++;
+      setIdx(following);
     }
   };
 
@@ -192,25 +194,24 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   };
 
   const checkFit = async (story: string, next: ToolData) => {
+    const epoch = requestEpoch.current;
     setWorking(true);
     try {
-      const res = await fetch("/api/tools/orientar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: story, current: kind }),
-      });
+      const res = await request("/api/tools/orientar", { text: story, current: kind });
       const body = (await res.json()) as { routes: Route[]; fits: boolean };
+      if (epoch !== requestEpoch.current) return;
       if (!body.fits && body.routes.length) setRedirect(body.routes);
     } catch {
       /* sin orientación: se continúa con normalidad */
     } finally {
-      setWorking(false);
+      if (epoch === requestEpoch.current) setWorking(false);
     }
-    advance(next);
+    if (epoch === requestEpoch.current) advance(next);
   };
 
   const submit = async (raw: string | string[]) => {
     if (!current || working) return;
+    const epoch = requestEpoch.current;
     const f = current.field;
     const value = Array.isArray(raw) ? raw : raw.trim();
     if (!hasValue(value)) {
@@ -221,36 +222,21 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
       accept(Array.isArray(raw) ? [] : "");
       return;
     }
-    // "No sé", "no", "ninguno"… no son un dato: se tratan como pregunta sin respuesta.
-    if (typeof value === "string" && /^(?:no|no\s+(?:lo\s+)?s[eé]|no\s+(?:aplica|tengo|hay)|ningun[oa]|nada|n\/a)[.!]*$/i.test(value)) {
-      if (!f.required) {
-        accept("");
-        return;
-      }
-      setDraft("");
-      setError(
-        f.name === "entidad" || f.name === "accionado"
-          ? "No hay problema. Toca una de las opciones que te sugiero arriba; si tienes dudas, la Personería de tu municipio te orienta sin costo."
-          : "No hay problema, pero necesito este dato para preparar el documento. Escribe lo que sepas.",
-      );
-      return;
-    }
     if (f.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))) {
       setError("Ese correo no parece completo. Revísalo, por favor.");
       return;
     }
+    const validation = validateTool(config, { ...data, [f.name]: value });
+    if (validation[f.name] && f.name !== "direccion") { setError(validation[f.name]); return; }
     setError("");
     const organize = typeof value === "string" ? organizeKind(f.name) : null;
     if (organize && typeof value === "string" && value !== data[f.name]) {
       // 1. ¿Falta algo importante? La IA puede hacer hasta dos preguntas de seguimiento.
       setWorking(true);
       try {
-        const res = await fetch("/api/tools/organizar", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: value, kind: organize, step: "preguntas" }),
-        });
+        const res = await request("/api/tools/organizar", { text: value, kind: organize, step: "preguntas" });
         const body = (await res.json()) as { questions?: string[] };
+        if (epoch !== requestEpoch.current) return;
         if (body.questions?.length) {
           setProbe({ original: value, questions: body.questions, kind: organize });
           setDraft("");
@@ -259,8 +245,9 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
       } catch {
         /* sin IA: se continúa sin preguntas de seguimiento */
       } finally {
-        setWorking(false);
+        if (epoch === requestEpoch.current) setWorking(false);
       }
+      if (epoch !== requestEpoch.current) return;
       await draftNarrative(value, organize);
       return;
     }
@@ -269,14 +256,12 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
 
   /** 2. Redacta el relato en limpio y lo muestra para que la persona lo confirme. */
   const draftNarrative = async (text: string, organize: "hechos" | "peticiones") => {
+    const epoch = requestEpoch.current;
     setWorking(true);
     try {
-      const res = await fetch("/api/tools/organizar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, kind: organize }),
-      });
+      const res = await request("/api/tools/organizar", { text, kind: organize });
       const body = (await res.json()) as { text: string; organized: boolean };
+      if (epoch !== requestEpoch.current) return;
       if (body.organized && body.text.trim() !== text) {
         setProposal({ original: text, organized: body.text.trim() });
         return;
@@ -284,15 +269,16 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     } catch {
       /* sin IA: se usa el texto tal como lo escribió la persona */
     } finally {
-      setWorking(false);
+      if (epoch === requestEpoch.current) setWorking(false);
     }
-    accept(text);
+    if (epoch === requestEpoch.current) accept(text);
   };
 
   const answerProbe = async (extra: string) => {
     if (!probe || working) return;
     const merged = extra.trim() ? `${probe.original}\n${extra.trim()}` : probe.original;
     const kindOf = probe.kind;
+    if (probe.questions.length > 1) { setProbe({ ...probe, original: merged, questions: probe.questions.slice(1) }); setDraft(""); return; }
     setProbe(null);
     setDraft(merged);
     await draftNarrative(merged, kindOf);
@@ -300,57 +286,27 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
 
   const edit = (i: number) => {
     setResume(done ? questions.length : Math.max(idx, i));
-    setState("idle");
     setIdx(i);
   };
 
-  const generate = async () => {
-    setState("loading");
-    setMessage("");
-    try {
-      const res = await fetch(`/api/tools/${kind}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...data,
-          ...Object.fromEntries(config.confirmations.map((c) => [c.name, confirmed[c.name] ? "si" : ""])),
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error || "No fue posible generar el documento.");
-      }
-      const url = URL.createObjectURL(await res.blob());
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${config.fileName}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 2000);
-      setState("done");
-    } catch (e) {
-      setState("error");
-      setMessage(e instanceof Error ? e.message : "No fue posible generar el documento.");
-    }
-  };
-
   const restart = () => {
-    setData({});
-    setConfirmed({});
-    setState("idle");
-    try {
-      window.sessionStorage.removeItem(storageKey);
-    } catch {
-      /* sin almacenamiento */
-    }
-    setIdx(0);
-    setResume(null);
+    stopSpeaking();
+    requestEpoch.current++; pendingRequest.current?.abort(); setWorking(false);
+    setData({}); setDraft(""); setPicked([]); setSaved(null); setError("");
+    setProposal(null); setProbe(null); setRedirect(null); story.current = ""; triaged.current = "";
+    restoredAnswer.current = null;
+    try { clearToolDrafts(window.localStorage); clearToolDrafts(window.sessionStorage); window.sessionStorage.removeItem("raizia.relato"); }
+    catch { setStorageMessage("No pudimos borrar el almacenamiento. Usa los ajustes de este navegador."); }
+    setIdx(0); setResume(null);
   };
-
-  const answered = questions.slice(0, Math.min(idx, questions.length));
-  const allConfirmed = config.confirmations.every((c) => confirmed[c.name]);
-  const progress = Math.round((Math.min(idx, questions.length) / questions.length) * 100);
+  const resumeSaved = () => {
+    if (!saved) return;
+    restoredAnswer.current = { answer: saved.answer, picked: saved.picked };
+    setData(saved.data); setIdx(Math.min(saved.index, questions.length)); setDraft(saved.answer); setPicked(saved.picked); setSaved(null);
+  };
+  const stages = questions.flatMap((q, i) => i === 0 || q.stepId !== questions[i - 1].stepId ? [i] : []);
+  const stage = done ? stages.length + 1 : stages.filter(i => i <= idx).length;
+  const progress = Math.round(stage / (stages.length + 1) * 100);
   const field: Field | undefined = current?.field;
   const multiline = field?.type === "textarea";
   const entityHints =
@@ -359,7 +315,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
       : [];
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
+    <div className="tools-flow mx-auto w-full max-w-3xl">
       <Link href="/herramientas" className="btn btn-ghost btn-sm -ml-3 text-muted">
         <ArrowLeft size={16} />
         Herramientas
@@ -373,7 +329,9 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
           </button>
         )}
       </div>
-      <div className="mt-4 flex items-center gap-3" role="status" aria-label={`Avance: ${progress} por ciento`}>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted">{storageMessage || "Tu avance queda en este dispositivo."}</p><button type="button" onClick={restart} className="btn btn-secondary">Borrar mis datos</button></div>
+      <p className="mt-4 text-sm font-semibold text-forest-700">Etapa {stage} de {stages.length + 1} · {done ? "Revisión y documento" : config.steps.find(s => s.id === current?.stepId)?.title}</p>
+      <div className="mt-4 flex items-center gap-3" role="progressbar" aria-label="Avance por etapas" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
         <div className="h-2 flex-1 overflow-hidden rounded-full bg-line">
           <div className="h-full rounded-full bg-forest-600 transition-[width] duration-500" style={{ width: `${progress}%` }} />
         </div>
@@ -390,50 +348,8 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
           </p>
         </Bot>
 
-        {ready &&
-          answered.map((q, i) => {
-            const v = data[q.field.name];
-            return (
-              <div key={q.field.name} className="space-y-3">
-                <Bot>
-                  <p>{askFor(q.field)}</p>
-                </Bot>
-                <div className="flex justify-end">
-                  <div className="max-w-[88%]">
-                    <div
-                      className={`rounded-3xl rounded-br-lg px-5 py-3 text-[1.0625rem] leading-relaxed whitespace-pre-line ${
-                        hasValue(v) ? "bg-forest-700 text-paper" : "border border-dashed border-line-strong text-faint"
-                      }`}
-                    >
-                      {Array.isArray(v) ? (
-                        v.length ? (
-                          <ul className="list-disc space-y-1 pl-5">
-                            {v.map((x) => (
-                              <li key={x}>{x}</li>
-                            ))}
-                          </ul>
-                        ) : (
-                          "Sin respuesta"
-                        )
-                      ) : (
-                        String(v ?? "").trim() || "Sin respuesta"
-                      )}
-                    </div>
-                    <div className="mt-1 text-right">
-                      <button
-                        type="button"
-                        onClick={() => edit(i)}
-                        className="inline-flex min-h-9 items-center gap-1.5 rounded-full px-2.5 text-sm font-medium text-forest-700 hover:bg-forest-50"
-                      >
-                        <Pencil size={14} />
-                        Cambiar
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        {ready && saved && <section className="card p-6" aria-label="Retomar avance"><h2 className="text-2xl text-forest-900">Hay un avance guardado</h2><p className="mt-3">Si es tuyo, puedes retomarlo. Si este dispositivo lo usó otra persona, bórralo para empezar.</p><div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={resumeSaved} className="btn btn-primary">Retomar mi avance</button><button type="button" onClick={restart} className="btn btn-secondary">Borrar y empezar</button></div></section>}
+        {ready && !saved && idx > 0 && !done && <button type="button" className="btn btn-ghost" onClick={() => setIdx(idx - 1)}><ArrowLeft size={16} /> Volver a la pregunta anterior</button>}
 
         {/* El relato no corresponde a este documento: se muestra el camino adecuado */}
         {ready && redirect && (
@@ -444,7 +360,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                 parece el camino adecuado para tu caso. Te sugiero esto:
               </p>
             </Bot>
-            <div className="pl-[2.6rem]">
+            <div className="sm:pl-[2.6rem]">
               <RouteCards routes={redirect} story={String(data.hechos || "")} />
               <button type="button" onClick={() => setRedirect(null)} className="btn btn-ghost btn-sm mt-3 text-muted">
                 Seguir con {config.name.toLowerCase()} de todos modos
@@ -454,12 +370,16 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
         )}
 
         {/* Pregunta actual */}
-        {ready && field && !redirect && (
+        {ready && !saved && field && !redirect && (
           <div key={`q-${idx}`} className="space-y-4">
             <Bot text={canSpeak ? askFor(field) : undefined}>
               <p>{askFor(field)}</p>
               {field.hint && <p className="mt-1.5 text-[0.9375rem] text-muted">{field.hint}</p>}
+              <p className="mt-3 text-sm text-muted">Ejemplo: {field.example || field.placeholder || (field.name === "hechos" ? "El [fecha], pedí [qué] a [entidad] en [lugar]. Me respondió [respuesta]. Esto me afecta en [consecuencia]." : field.type === "select" || field.type === "checkboxes" ? field.options?.[0] : "Escribe solo lo que sabes. Si falta un dato, puedes decir que no lo recuerdas.")}</p>
+              <details className="mt-2"><summary className="min-h-11 cursor-pointer py-3 font-semibold">¿Por qué te pregunto esto?</summary><p className="text-sm">{field.why || (current?.stepId === "procedencia" ? "El juez necesita entender por qué buscas su ayuda ahora y si otro camino puede protegerte a tiempo." : current?.stepId === "persona" ? "Estos datos permiten identificar a quien presenta y firma el documento." : current?.stepId === "contacto" ? "Aquí recibirás la respuesta. Basta un medio de contacto." : "Tu respuesta ayuda a explicar y apoyar lo que pides. Si falta, se señalará para que puedas completarlo.")}</p></details>
             </Bot>
+
+            {["responsables", "plazos", "verificaciones", "hechosApoyo", "pruebasApoyo", "demuestra"].includes(field.name) && <aside className="rounded-2xl border border-line bg-sand/50 p-5"><p className="font-semibold">Para ayudarte a recordar</p>{(field.name === "demuestra" ? ["pruebas"] : ["pretensiones", ...(field.name === "hechosApoyo" ? ["hechos"] : field.name === "pruebasApoyo" ? ["pruebas"] : [])]).map(key => <div key={key} className="mt-3"><p className="text-sm font-semibold text-muted">{key === "pretensiones" ? "Tus pedidos" : key === "hechos" ? "Tus hechos" : "Tus pruebas"}</p><ol className="mt-1 list-decimal space-y-2 pl-5">{entries(data[key]).map((text, i) => <li key={i}>{text}</li>)}</ol></div>)}</aside>}
 
             {proposal ? (
               <div className="animate-rise space-y-4">
@@ -470,9 +390,9 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                       <li key={i}>{l}</li>
                     ))}
                   </ol>
-                  <p className="mt-2 text-sm text-muted">No agregué nada: solo ordené tus palabras.</p>
+                  <p className="mt-2 text-sm text-muted">Compara la propuesta con tus palabras. Acepta solo si conserva todo y no agrega nada.</p>
                 </Bot>
-                <div className="grid gap-2.5 pl-[2.6rem] sm:grid-cols-3">
+                <div className="grid gap-2.5 sm:pl-[2.6rem] sm:grid-cols-3">
                   <button type="button" onClick={() => accept(proposal.organized)} className="btn btn-primary !min-h-12">
                     <Check size={17} />
                     Sí, está bien
@@ -496,7 +416,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                 </div>
               </div>
             ) : field.type === "select" ? (
-              <div className="grid gap-2.5 pl-[2.6rem]">
+              <div className="grid gap-2.5 sm:pl-[2.6rem]">
                 {field.options!.map((o) => (
                   <button
                     key={o}
@@ -513,7 +433,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                 ))}
               </div>
             ) : field.type === "checkboxes" ? (
-              <div className="space-y-2.5 pl-[2.6rem]">
+              <div className="space-y-2.5 sm:pl-[2.6rem]">
                 {field.options!.map((o) => {
                   const on = picked.includes(o);
                   return (
@@ -550,14 +470,14 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
                   e.preventDefault();
                   void (probe ? answerProbe(draft) : submit(draft));
                 }}
-                className="space-y-3 pl-[2.6rem]"
+                className="space-y-3 sm:pl-[2.6rem]"
               >
                 {probe && (
-                  <div className="animate-rise -ml-[2.6rem]">
-                    <Bot text={canSpeak ? probe.questions.join(" ") : undefined}>
+                  <div className="animate-rise sm:-ml-[2.6rem]">
+                    <Bot text={canSpeak ? probe.questions[0] : undefined}>
                       <p className="font-semibold">Gracias. Para que quede más claro, cuéntame también:</p>
                       <ul className="mt-2 list-disc space-y-1.5 pl-5 marker:text-clay">
-                        {probe.questions.map((q) => (
+                        {probe.questions.slice(0, 1).map((q) => (
                           <li key={q}>{q}</li>
                         ))}
                       </ul>
@@ -641,12 +561,12 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
             )}
 
             {error && (
-              <p role="alert" className="pl-[2.6rem] text-[0.9375rem] font-medium text-[#9b2c1f]">
+              <p role="alert" className="sm:pl-[2.6rem] text-[0.9375rem] font-medium text-[#9b2c1f]">
                 {error}
               </p>
             )}
             {probe && !working && (
-              <div className="pl-[2.6rem]">
+              <div className="sm:pl-[2.6rem]">
                 <button type="button" onClick={() => answerProbe("")} className="btn btn-ghost btn-sm text-muted">
                   <SkipForward size={15} />
                   No lo sé: continuar
@@ -654,7 +574,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
               </div>
             )}
             {!proposal && !probe && !field.required && (
-              <div className="pl-[2.6rem]">
+              <div className="sm:pl-[2.6rem]">
                 <button type="button" onClick={() => accept(field.type === "checkboxes" ? [] : "")} className="btn btn-ghost btn-sm text-muted">
                   <SkipForward size={15} />
                   No aplica o no lo sé: saltar
@@ -664,80 +584,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
           </div>
         )}
 
-        {/* Cierre */}
-        {ready && done && (
-          <div className="space-y-5">
-            <Bot>
-              <p>
-                <strong className="font-semibold">Ya tengo todo.</strong> Revisa tus respuestas arriba: puedes tocar
-                «Cambiar» en cualquiera. Cuando estés conforme, descarga tu documento.
-              </p>
-            </Bot>
-            <div className="notice">
-              <TriangleAlert size={18} className="mt-0.5 shrink-0" />
-              <div>
-                <p className="font-semibold">Antes de descargar, ten presente:</p>
-                <ul className="mt-2 list-disc space-y-1.5 pl-4">
-                  {config.warnings.map((w) => (
-                    <li key={w}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            <div className="space-y-2.5">
-              {config.confirmations.map((c) => (
-                <label
-                  key={c.name}
-                  className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3.5 leading-snug transition-colors ${
-                    confirmed[c.name] ? "border-forest-600 bg-forest-50" : "border-line-strong bg-paper"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!confirmed[c.name]}
-                    onChange={(e) => setConfirmed((x) => ({ ...x, [c.name]: e.target.checked }))}
-                    className="mt-0.5 h-5 w-5 shrink-0 accent-forest-700"
-                  />
-                  <span>{c.label}</span>
-                </label>
-              ))}
-            </div>
-            {state === "error" && (
-              <div className="notice notice-error" role="alert">
-                <TriangleAlert size={18} className="mt-0.5 shrink-0" />
-                <p>{message}</p>
-              </div>
-            )}
-            {state === "done" && (
-              <div className="notice notice-info">
-                <CircleCheck size={18} className="mt-0.5 shrink-0" />
-                <div>
-                  <p className="font-semibold">Tu documento se descargó en formato Word.</p>
-                  <p className="mt-1">Búscalo en la carpeta de descargas, léelo completo y ajústalo si hace falta.</p>
-                </div>
-              </div>
-            )}
-            <div className="flex flex-wrap items-center justify-end gap-2.5">
-              {state === "done" && (
-                <button type="button" onClick={restart} className="btn btn-ghost">
-                  Empezar otro
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={generate}
-                disabled={!allConfirmed || state === "loading"}
-                className="btn btn-accent !min-h-13 !px-6 text-base"
-              >
-                {state === "loading" ? <LoaderCircle size={18} className="animate-spin" /> : <Download size={18} />}
-                {state === "loading" ? "Generando…" : state === "done" ? "Descargar de nuevo" : "Descargar mi documento"}
-              </button>
-            </div>
-            {!allConfirmed && (
-              <p className="text-right text-sm text-muted">Marca las casillas para habilitar la descarga.</p>
-            )}
-          </div>
-        )}
+        {ready && !saved && done && <DocumentReview kind={kind} data={data} onChange={setData} editField={name => { const i = questions.findIndex(q => q.field.name === name); if (i >= 0) edit(i); }} />}
         <div ref={endRef} className="h-2" />
       </div>
     </div>
