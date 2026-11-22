@@ -3,8 +3,29 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { TUTELA, TOOL_LIST, RIGHTS, LEGACY_TUTELA_FIELDS, interviewQuestions, tutelaDefaults, migrateTutelaDraft, validateTool, suggestRights, optionLabel } from '../src/lib/tools-config.ts';
 import { readDraft, draftKey } from '../src/lib/tools-draft.ts';
+import { interviewHarness } from './support/interview-harness.mjs';
 
 const short = tutelaDefaults({ hechos: 'Relato ficticio de una negativa de atención médica.', accionado: 'ENTIDAD FICTICIA', actuaciones: 'Pedí una solución ficticia; la negaron y no conozco otro camino.', cuando: 'En noviembre de 2026; sigue pasando.', medidaProvisional: 'No', derechos: [RIGHTS[7]], pretensiones: 'Que la entidad ficticia entregue el medicamento ficticio.', pruebas: 'ninguna por ahora', nombre: 'PERSONA FICTICIA', numeroDocumento: 'DOCUMENTO-FICTICIO', ciudad: 'MUNICIPIO FICTICIO', correo: 'persona@example.invalid' });
+
+test('Semáforo muestra tres sugerencias y deja el resto cerrado en Agregar más detalles; juramento por casilla', async () => {
+  const ui = interviewHarness(undefined, { component: 'DocumentReview', data: short });
+  const section = ui.find(n => n.props['aria-labelledby'] === 'revision-calidad');
+  const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : node && typeof node === 'object' ? [node, ...nodes(node.props?.children)] : [];
+  const immediate = (Array.isArray(section.props.children) ? section.props.children : [section.props.children]).flat(Infinity);
+  const visibleList = immediate.find(n => n?.type === 'ul');
+  assert.equal(nodes(visibleList).filter(n => n.type === 'li').length, 3);
+  const details = immediate.find(n => n?.type === 'details' && nodes(n).some(c => c.type === 'summary' && c.props.children === 'Agregar más detalles (opcional)'));
+  assert.equal(details.props.open, undefined);
+  assert.ok(nodes(details).some(n => n.type === 'li'));
+  assert.match(ui.text(), /Confirmación pendiente/);
+  assert.doesNotMatch(ui.text(), /números de los hechos|números de las pruebas/);
+  await ui.act(() => ui.button('Ver y editar el documento').props.onClick());
+  assert.equal(ui.button('Descargar documento Word').props.disabled, true);
+  for (let i = 0; i < 2; i++) await ui.act(() => ui.nodes().filter(n => n.type === 'input' && n.props.type === 'checkbox')[i].props.onChange({ target: { checked: true } }));
+  assert.doesNotMatch(ui.text(), /Confirmación pendiente/);
+  assert.equal(ui.button('Descargar documento Word').props.disabled, false);
+  ui.unmount();
+});
 
 test('Camino normal: doce pantallas en orden, documento y contacto agrupados', () => {
   const questions = interviewQuestions(TUTELA, tutelaDefaults());

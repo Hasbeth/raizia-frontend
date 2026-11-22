@@ -14,6 +14,7 @@ export function reviewQuality(kind: string, data: ToolData): { level: "red" | "a
     if (["tutela", "popular", "cumplimiento"].includes(kind)) {
       for (const [field, source, label] of [["hechosApoyo", "hechos", "hecho"], ["pruebasApoyo", "pruebas", "prueba"]]) {
         const line = entries(data[field])[i] || "";
+        if (kind === "tutela" && !line) continue;
         if (kind === "tutela" && field === "pruebasApoyo" && noEvidence(data) && !line) continue;
         const refs = line.split(/[,; ]+/).filter(Boolean);
         if (!refs.length || refs.some(ref => !/^\d+$/.test(ref) || Number(ref) < 1 || Number(ref) > entries(data[source]).length)) warn(field, `Pedido ${i + 1}: señala al menos un ${label} existente que lo apoye.`);
@@ -21,11 +22,15 @@ export function reviewQuality(kind: string, data: ToolData): { level: "red" | "a
       for (const [field, label] of [["responsables", "quién debe cumplir"], ["plazos", "en qué plazo lo pides"], ["verificaciones", "cómo se comprueba el cumplimiento"]]) if (!entries(data[field])[i] && !(kind === "tutela" && field === "responsables" && value(data.accionado))) warn(field, kind === "tutela" ? `Pedido ${i + 1}: puedes agregar ${label} en los detalles opcionales.` : `Pedido ${i + 1}: falta ${label}.`);
     }
   });
-  if (!(kind === "tutela" && noEvidence(data))) entries(data.pruebas).forEach((_, i) => { if (!entries(data.demuestra)[i]) warn("demuestra", `Prueba ${i + 1}: explica qué demuestra.`); });
+  if (!(kind === "tutela" && noEvidence(data))) entries(data.pruebas).forEach((_, i) => { if (!entries(data.demuestra)[i]) warn("demuestra", kind === "tutela" ? `Prueba ${i + 1}: si quieres, agrega qué demuestra en los detalles opcionales.` : `Prueba ${i + 1}: explica qué demuestra.`); });
   if (kind === "tutela" && (!value(data.actuaciones) || /^(no|ninguna|no hice nada)[.!]?$/i.test(value(data.actuaciones)))) warn("actuaciones", "No aparece una gestión previa. Explica qué intentaste o por qué no pudiste hacerlo; esto no impide continuar.");
   if (kind === "tutela" && value(data.medidaProvisional) === "Sí" && (!value(data.medida) || !value(data.razonMedida))) warn("medida", "La orden urgente necesita una medida concreta y una razón apoyada en pruebas.");
   const missing = buildModel(kind, data).missing;
-  if (missing.length) warn("", `Hay ${missing.length} datos por completar en el documento o el correo.`);
+  if (kind === "tutela") {
+    if (value(data.juramento) !== "si") issues.unshift({ level: "amber", field: "", message: "Confirmación pendiente: marca la casilla del juramento al revisar el documento." });
+    if (!value(data.contactoAccionado)) issues.unshift({ level: "amber", field: "contactoAccionado", message: "Recomendado: agrega una dirección o correo de la parte accionada, si lo conoces. Puedes continuar sin este dato." });
+  } else if (missing.length) warn("", `Hay ${missing.length} datos por completar en el documento o el correo.`);
   if (Object.keys(data).some(k => k.startsWith("edicion_"))) warn("", "Editaste secciones: comprueba que cada pedido siga apoyado en hechos y pruebas. El semáforo revisa las respuestas; no puede validar tus cambios jurídicos.");
+  issues.sort((a, b) => Number(b.level === "red") - Number(a.level === "red"));
   return { level: issues.some(i => i.level === "red") ? "red" : issues.length ? "amber" : "green", issues, missing };
 }

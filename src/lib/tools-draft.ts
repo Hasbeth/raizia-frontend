@@ -1,5 +1,7 @@
 import type { ToolData } from "./tools-config";
-export type SavedDraft = { version: 2 | 3; kind: string; data: ToolData; index: number; answer: string; picked: string[]; questionId?: string };
+import type { ConversationState } from "./tools-conversation";
+export type ParkedAnswers = Record<string, { answer: string; picked: string[] }>;
+export type SavedDraft = { version: 2 | 3; kind: string; data: ToolData; index: number; answer: string; picked: string[]; questionId?: string; conversation?: ConversationState; parked?: ParkedAnswers };
 export const draftKey = (kind: string) => `raizia.borrador.v2.${kind}`;
 export function readDraft(storage: Pick<Storage, "getItem">, kind: string): SavedDraft | null {
   try {

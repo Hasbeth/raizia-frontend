@@ -18,9 +18,12 @@ import { entries } from "@/lib/document-model";
 import type { OrientationResult, Route } from "@/lib/types";
 import { RouteCards } from "./RouteCards";
 import { DocumentReview } from "./DocumentReview";
+import { Conversation, ConversationNotes } from "./Conversation";
+import { acceptConversationProposal, emptyConversation, restoreConversation, type ConversationState, type ConversationProposal } from "@/lib/tools-conversation";
+import { EMERGENCY_NOTICE, explicitDanger } from "@/lib/emergency";
 import { ToolFields } from "./ToolFields";
 import { loadProfile } from "../chat/ProfileStep";
-import { clearToolDrafts, draftKey, readDraft, type SavedDraft } from "@/lib/tools-draft";
+import { clearToolDrafts, draftKey, readDraft, type SavedDraft, type ParkedAnswers } from "@/lib/tools-draft";
 import {
   askFor,
   ENTITY_REASSURANCE,
@@ -69,10 +72,13 @@ function Bot({ children, text }: { children: React.ReactNode; text?: string }) {
   );
 }
 
-export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => void }) {
+export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: string; onSwitch?: () => void; initialMode?: ConversationState["mode"] }) {
   const config = TOOLS[kind];
   const storageKey = draftKey(kind);
   const [data, setData] = useState<ToolData>(() => kind === "tutela" ? tutelaDefaults() : {});
+  const [conversation, setConversation] = useState(() => emptyConversation(initialMode));
+  const [parked, setParked] = useState<ParkedAnswers>({});
+  const chatting = kind === "tutela" && conversation.mode === "conversation";
   const questions = useMemo(() => interviewQuestions(config, data), [config, data]);
   const [idx, setIdx] = useState(0);
   const [resume, setResume] = useState<number | "revision" | null>(null);
@@ -128,13 +134,13 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     if (kind === "tutela" && questionId !== "revision" && answerFor.current !== questionId) return;
     try {
       const answered = Object.keys(data).some(key => kind !== "tutela" || !["calidad", "tipoDocumento"].includes(key));
-      if (!answered && !draft && !picked.length && idx === 0) window.localStorage.removeItem(storageKey);
-      else window.localStorage.setItem(storageKey, JSON.stringify({ version: kind === "tutela" ? 3 : 2, kind, data, index: idx, questionId, answer: draft, picked }));
+      if (!answered && !draft && !picked.length && idx === 0 && !conversation.draft && !conversation.mensajes.length) window.localStorage.removeItem(storageKey);
+      else window.localStorage.setItem(storageKey, JSON.stringify({ version: kind === "tutela" ? 3 : 2, kind, data, index: idx, questionId, answer: draft, picked, ...(kind === "tutela" ? { conversation, parked } : {}) }));
     } catch {
       const frame = window.requestAnimationFrame(() => setStorageMessage("No se pudo guardar el avance. Mantén esta página abierta."));
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [data, draft, picked, idx, kind, ready, saved, storageKey, questionId]);
+  }, [data, draft, picked, idx, kind, ready, saved, storageKey, questionId, conversation, parked]);
 
   /* Al cambiar de pregunta: carga la respuesta previa y enfoca el campo. */
   useEffect(() => {
@@ -202,6 +208,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
 
   const accept = (value: string | string[]) => {
     if (!current) return;
+    setParked(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => key !== current.stepId)));
     const next = { ...data, [current.field.name]: value };
     setData(next);
     setProposal(null);
@@ -315,6 +322,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   };
 
   const edit = (i: number) => {
+    restoredAnswer.current = parked[questions[i]?.stepId] || null;
     setResume(done ? "revision" : Math.max(idx, i));
     setIdx(i);
   };
@@ -324,6 +332,8 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     requestEpoch.current++; pendingRequest.current?.abort(); setWorking(false);
     setData(kind === "tutela" ? tutelaDefaults() : {}); setDraft(""); setPicked([]); setSaved(null); setError("");
     setProposal(null); setProbe(null); setRedirect(null); story.current = ""; triaged.current = "";
+    setConversation(emptyConversation());
+    setParked({});
     restoredAnswer.current = null;
     try { clearToolDrafts(window.localStorage); clearToolDrafts(window.sessionStorage); window.sessionStorage.removeItem("raizia.relato"); }
     catch { setStorageMessage("No pudimos borrar el almacenamiento. Usa los ajustes de este navegador."); }
@@ -333,12 +343,39 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     if (!saved) return;
     const restored = kind === "tutela" ? migrateTutelaDraft(saved) : saved;
     restoredAnswer.current = { answer: restored.answer, picked: restored.picked };
+    setConversation(restoreConversation(saved.conversation));
+    setParked(Object.fromEntries(Object.entries(saved.parked || {}).filter(([, v]) => v && typeof v.answer === "string" && Array.isArray(v.picked) && v.picked.every(item => typeof item === "string"))));
     setData(restored.data); setIdx(Math.min(restored.index, interviewQuestions(config, restored.data).length)); setDraft(restored.answer); setPicked(restored.picked); setSaved(null);
   };
   const stages = questions.flatMap((q, i) => i === 0 || q.stepId !== questions[i - 1].stepId ? [i] : []);
   const stage = done ? stages.length + 1 : stages.filter(i => i <= idx).length;
   const progress = kind === "tutela" ? Math.round(Math.min(idx + 1, questions.length) / questions.length * 100) : Math.round(stage / (stages.length + 1) * 100);
   const field: Field | undefined = current?.field;
+  const updateChatData = (next: ToolData) => {
+    const nextQuestions = interviewQuestions(config, next);
+    const position = done ? nextQuestions.length : nextQuestions.findIndex(q => q.stepId === current?.stepId);
+    const answer = field && next[field.name] !== data[field.name] && typeof next[field.name] === "string" ? String(next[field.name]) : draft;
+    if (position >= 0 && position !== idx) {
+      restoredAnswer.current = { answer, picked };
+      setIdx(position);
+    }
+    setDraft(answer);
+    setData(next);
+    setParked(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => {
+      const name = questions.find(q => q.stepId === key)?.field.name;
+      return !name || next[name] === data[name];
+    })));
+  };
+  const acceptChat = (p: ConversationProposal) => {
+    updateChatData(acceptConversationProposal(data, p));
+  };
+  const changeMode = (mode: ConversationState["mode"], context?: string) => {
+    stopSpeaking();
+    if (mode === "conversation" && current && (draft.trim() || picked.length) && JSON.stringify(current.field.type === "checkboxes" ? picked : draft) !== JSON.stringify(data[current.field.name])) {
+      setParked(previous => ({ ...previous, [current.stepId]: { answer: draft, picked } }));
+    }
+    setConversation(previous => ({ ...previous, mode, contexto: context }));
+  };
   const prompt = current?.title || (field ? askFor(field) : "");
   const multiline = field?.type === "textarea";
   const entityHints =
@@ -362,6 +399,10 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
         )}
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted">{storageMessage || "Tu avance queda en este dispositivo."}</p><button type="button" onClick={restart} className="btn btn-secondary">Borrar mis datos</button></div>
+      {kind === "tutela" && ready && !saved && <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label="Cómo quieres contar tu caso"><button type="button" className="btn btn-secondary min-h-16 w-full" aria-pressed={chatting} disabled={working} onClick={() => changeMode("conversation")}>Contarlo conversando</button><button type="button" className="btn btn-secondary min-h-16 w-full" aria-pressed={!chatting} onClick={() => changeMode("steps")}>Responder paso a paso</button></div>}
+      {kind === "tutela" && conversation.notice && <p className="notice mt-4" role="status">{conversation.notice}</p>}
+      {kind === "tutela" && !chatting && (conversation.peligro || explicitDanger(draft) || explicitDanger(conversation.draft)) && <p className="notice mt-4" role="alert">{EMERGENCY_NOTICE}</p>}
+      {!chatting && <>
       <p className="mt-4 text-sm font-semibold text-forest-700">{kind !== "tutela" && `Etapa ${stage} de ${stages.length + 1} · `}{done ? "Revisión y documento" : config.steps.find(s => s.id === current?.stepId)?.title}</p>
       <div className="mt-4 flex items-center gap-3" role="progressbar" aria-label={kind === "tutela" ? "Avance por preguntas" : "Avance por etapas"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
         <div className="h-2 flex-1 overflow-hidden rounded-full bg-line">
@@ -372,20 +413,22 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
         </span>
       </div>
 
+      </>}
       <div className="mt-8 space-y-5" aria-live="polite">
         {orientationNotice && <p role="alert" className="card p-4">{orientationNotice}</p>}
-        <Bot>
+        {!chatting && <Bot>
           <p>
             Hola. Te voy a hacer unas preguntas, <strong className="font-semibold">una por una</strong>, para preparar
             tu documento. Responde con tus palabras; no importa si hay errores.
           </p>
-        </Bot>
+        </Bot>}
+        {ready && !saved && chatting && <Conversation state={conversation} onChange={setConversation} data={data} onData={updateChatData} onAccept={acceptChat} onReview={() => { setIdx(questions.length); changeMode("steps"); }} />}
 
         {ready && saved && <section className="card p-6" aria-label="Retomar avance"><h2 className="text-2xl text-forest-900">Hay un avance guardado</h2><p className="mt-3">Si es tuyo, puedes retomarlo. Si este dispositivo lo usó otra persona, bórralo para empezar.</p><div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={resumeSaved} className="btn btn-primary">Retomar mi avance</button><button type="button" onClick={restart} className="btn btn-secondary">Borrar y empezar</button></div></section>}
-        {ready && !saved && idx > 0 && !done && <button type="button" className="btn btn-ghost" onClick={() => setIdx(idx - 1)}><ArrowLeft size={16} /> Volver a la pregunta anterior</button>}
+        {ready && !saved && !chatting && idx > 0 && !done && <button type="button" className="btn btn-ghost" onClick={() => setIdx(idx - 1)}><ArrowLeft size={16} /> Volver a la pregunta anterior</button>}
 
         {/* El relato no corresponde a este documento: se muestra el camino adecuado */}
-        {ready && redirect && (
+        {ready && !chatting && redirect && (
           <div className="animate-rise space-y-4">
             <Bot>
               <p>
@@ -403,8 +446,9 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
         )}
 
         {/* Pregunta actual */}
-        {ready && !saved && field && !redirect && (
+        {ready && !saved && !chatting && field && !redirect && (
           <div key={`q-${idx}`} className="space-y-4">
+            {kind === "tutela" && <button type="button" className="btn btn-secondary" disabled={working} onClick={() => changeMode("conversation", field.name)}>Quiero contar algo más</button>}
             <Bot text={canSpeak ? prompt : undefined}>
               <p>{prompt}</p>
               {field.hint && <p className="mt-1.5 text-[0.9375rem] text-muted">{field.hint}</p>}
@@ -623,7 +667,19 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
           </div>
         )}
 
-        {ready && !saved && done && <DocumentReview kind={kind} data={data} onChange={setData} editField={name => { const i = questions.findIndex(q => q.fields.some(f => f.name === name)); if (i >= 0) edit(i); }} />}
+        {ready && !saved && !chatting && done && <>
+          {kind === "tutela" && Object.entries(parked).map(([key, answer]) => {
+            const index = questions.findIndex(q => q.stepId === key);
+            return index < 0 ? null : <section key={key} className="card p-5"><h3 className="font-semibold">Respuesta que dejaste sin confirmar: {questions[index].title}</h3><p className="my-3 whitespace-pre-wrap">{answer.picked.length ? answer.picked.join(", ") : answer.answer}</p><button type="button" className="btn btn-secondary" onClick={() => edit(index)}>Volver a completar esta respuesta</button></section>;
+          })}
+          {kind === "tutela" && <section className="card space-y-4 p-5">
+            <label htmlFor="algo-mas-tutela" className="label">¿Hay algo más que consideres importante?</label><p>Es opcional. Revisa y acepta lo que quieras incluir como hechos adicionales.</p>
+            <textarea id="algo-mas-tutela" className="input" maxLength={2000} value={conversation.draft} onChange={e => setConversation(prev => ({ ...prev, draft: e.target.value }))} />
+            <button type="button" className="btn btn-secondary" disabled={!conversation.draft.trim()} onClick={() => setConversation(prev => ({ ...prev, draft: "", mensajes: [...prev.mensajes, { role: "user", content: prev.draft.trim() }], propuestas: [...prev.propuestas, { campo: "hechosAdicionales", valor: prev.draft.trim(), cita_literal: prev.draft.trim() }] }))}>Revisar como hecho adicional</button>
+            <ConversationNotes state={conversation} onChange={setConversation} data={data} onAccept={acceptChat} />
+          </section>}
+          <DocumentReview kind={kind} data={data} onChange={setData} editField={name => { const i = questions.findIndex(q => q.fields.some(f => f.name === name)); if (i >= 0) edit(i); }} />
+        </>}
         <div ref={endRef} className="h-2" />
       </div>
     </div>

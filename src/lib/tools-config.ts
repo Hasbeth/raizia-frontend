@@ -793,7 +793,9 @@ TUTELA.steps = [
   shortStep("contacto", "¿Dónde te avisamos?", [shortField("correo", { hint: "Basta un correo o un teléfono." }), shortField("telefono")]),
 ];
 const essentialNames = new Set(TUTELA.steps.flatMap(s => s.fields.map(f => f.name)));
-TUTELA.steps.push({ id: "detalles", title: "Agregar más detalles (opcional)", intro: "Completa solo lo que sabes. Los datos pendientes se resaltarán en el borrador.", optionalDetails: true, fields: Object.values(tutelaFields).filter(f => !essentialNames.has(f.name)).map(f => ({ ...f, required: false })) });
+// Detalle opcional de conversación: no añade preguntas al camino corto.
+tutelaFields.hechosAdicionales = { name: "hechosAdicionales", label: "Hechos adicionales que aceptaste incluir", type: "textarea", hint: "Incluye solo lo que quieres que aparezca en el documento." };
+TUTELA.steps.push({ id: "detalles", title: "Agregar más detalles (opcional)", intro: "Completa solo lo que sabes. Los datos pendientes se resaltarán en el borrador.", optionalDetails: true, fields: Object.values(tutelaFields).filter(f => !essentialNames.has(f.name) && !["hechosApoyo", "pruebasApoyo"].includes(f.name)).map(f => ({ ...f, required: false })) });
 
 export function stepApplies(step: Step, data: ToolData): boolean {
   if (step.condition === "urgente") return data.medidaProvisional === "Sí";
