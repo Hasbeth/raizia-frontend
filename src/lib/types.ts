@@ -1,4 +1,4 @@
-import type { CategoryNode, DocStatus, DocumentSummary } from "./constants";
+import type { CategoryNode, ChatSource, DocStatus, DocumentSummary } from "./constants";
 
 export type DocumentMeta = {
   title?: string;
@@ -17,6 +17,9 @@ export type DocumentMeta = {
 export type CreateResult = { document: DocumentSummary; duplicate: boolean; warning?: string };
 
 export type Route = {
+  condition?: string;
+  citations?: number[];
+  sources?: ChatSource[];
   id: string;
   title: string;
   /** Qué entendió RAIZIA del relato (una frase). */
@@ -29,6 +32,11 @@ export type Route = {
 };
 
 export type Doubt = { q: string; a: string };
+export type OrientationResult = {
+  entendi: string[]; hechos_faltantes: string[]; preguntas: { texto: string; opciones?: string[] }[];
+  urgencia: "inmediata" | "pronto" | "normal"; routes: Route[]; sources: ChatSource[];
+  fallback: boolean; fits: boolean; notice?: string; limitNotice?: string; general?: string; emergency?: string; cases?: string[]; motiveNote?: string;
+};
 
 export type LibraryParams = {
   q?: string;

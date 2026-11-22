@@ -15,9 +15,10 @@ import {
 import { LogoMark } from "@/components/Logo";
 import { speak, stopSpeaking } from "@/lib/speech";
 import { entries } from "@/lib/document-model";
-import type { Route } from "@/lib/types";
+import type { OrientationResult, Route } from "@/lib/types";
 import { RouteCards } from "./RouteCards";
 import { DocumentReview } from "./DocumentReview";
+import { loadProfile } from "../chat/ProfileStep";
 import { clearToolDrafts, draftKey, readDraft, type SavedDraft } from "@/lib/tools-draft";
 import {
   askFor,
@@ -82,6 +83,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
   const [probe, setProbe] = useState<Probe | null>(null);
   // Caminos sugeridos cuando el relato no corresponde a esta herramienta.
   const [redirect, setRedirect] = useState<Route[] | null>(null);
+  const [orientationNotice, setOrientationNotice] = useState("");
   const triaged = useRef("");
   const [saved, setSaved] = useState<SavedDraft | null>(null);
   const [storageMessage, setStorageMessage] = useState("");
@@ -197,9 +199,10 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
     const epoch = requestEpoch.current;
     setWorking(true);
     try {
-      const res = await request("/api/tools/orientar", { text: story, current: kind });
-      const body = (await res.json()) as { routes: Route[]; fits: boolean };
+      const res = await request("/api/tools/orientar", { text: story, current: kind, profile: loadProfile() });
+      const body = (await res.json()) as OrientationResult;
       if (epoch !== requestEpoch.current) return;
+      setOrientationNotice([body.emergency, body.notice].filter(Boolean).join(" "));
       if (!body.fits && body.routes.length) setRedirect(body.routes);
     } catch {
       /* sin orientación: se continúa con normalidad */
@@ -341,6 +344,7 @@ export function Interview({ kind, onSwitch }: { kind: string; onSwitch?: () => v
       </div>
 
       <div className="mt-8 space-y-5" aria-live="polite">
+        {orientationNotice && <p role="alert" className="card p-4">{orientationNotice}</p>}
         <Bot>
           <p>
             Hola. Te voy a hacer unas preguntas, <strong className="font-semibold">una por una</strong>, para preparar

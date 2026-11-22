@@ -72,11 +72,13 @@ export function AssistantMessage({
   message,
   question = "",
   onRetry,
+  onAnswer,
 }: {
   message: ChatMessage;
   /** Consulta de la persona que originó esta respuesta. */
   question?: string;
   onRetry?: () => void;
+  onAnswer?: (answer: string) => void;
 }) {
   const { meta, status, content, error } = message;
   const [copied, setCopied] = useState(false);
@@ -263,6 +265,7 @@ export function AssistantMessage({
                   <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 pt-3.5 pb-3">
                     <div className="min-w-0">
                       <p className="font-semibold leading-snug text-forest-900">{doc.title}</p>
+                      {doc.kind === "contexto" && <span className="chip chip-earth mt-1">{doc.docType} · Contexto</span>}
                       <p className="mt-0.5 text-xs text-muted">
                         {[doc.docType, doc.entity, formatDate(doc.docDate)].filter(Boolean).join(" · ")}
                       </p>
@@ -316,6 +319,11 @@ export function AssistantMessage({
           </section>
         )}
 
+        {!streaming && meta?.identityQuestion && onAnswer && <fieldset className="mt-4">
+          <legend className="font-semibold">{meta.identityQuestion.texto}</legend>
+          <div className="mt-2 flex flex-wrap gap-2">{meta.identityQuestion.opciones.map(option =>
+            <button key={option} type="button" className="btn btn-secondary" onClick={() => onAnswer(option)}>{option}</button>)}</div>
+        </fieldset>}
         {!streaming && meta?.mode === "conversacion" && meta.notice === "sin_fuentes" && content && (
           <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs leading-relaxed text-faint">
             <SearchX size={13} className="shrink-0" />

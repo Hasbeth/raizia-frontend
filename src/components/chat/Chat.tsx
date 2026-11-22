@@ -558,6 +558,7 @@ export function Chat() {
                     </div>
                   ) : (
                     <AssistantMessage
+                      onAnswer={i === messages.length - 1 && !busy ? (answer) => void send(answer) : undefined}
                       key={m.id}
                       message={m}
                       question={messages[i - 1]?.role === "user" ? messages[i - 1].content : ""}
