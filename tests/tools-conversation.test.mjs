@@ -50,7 +50,10 @@ test('Chat real: texto, peligro antes de IA, contexto y revisión sin sobrescrit
   await ui.input('conversacion-mensaje', 'Me van a matar. ' + text);
   assert.ok(ui.text().includes(EMERGENCY_NOTICE)); assert.equal(ui.calls.length, 0);
   await ui.submit();
-  assert.ok(ui.text().includes(EMERGENCY_NOTICE)); assert.equal(ui.calls.length, 1);
+  assert.ok(ui.text().includes(EMERGENCY_NOTICE)); assert.equal(ui.calls.length, 0);
+  assert.match(ui.text(), /¿Estás a salvo ahora/); assert.deepEqual(ui.chat().state.propuestas, []);
+  await ui.input('conversacion-mensaje', 'Sí, estoy a salvo. ' + text); await ui.submit();
+  assert.equal(ui.calls.length, 1);
   assert.equal(ui.calls[0].body.confirmados.numeroDocumento, undefined);
   await ui.input('conversacion-mensaje', 'NUEVO BORRADOR MIENTRAS ESPERO');
   await ui.act(() => release({ ok: true, status: 200, json: async () => result }));

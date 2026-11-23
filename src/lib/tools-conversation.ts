@@ -6,7 +6,8 @@ export type ConversationState = {
   mode: "conversation" | "steps"; mensajes: ConversationMessage[]; propuestas: ConversationProposal[];
   draft: string; preguntados: Record<string, number>; contexto?: string; notice: string; peligro: boolean;
 };
-export const CONVERSATION_FIELDS = ["hechos", "accionado", "actuaciones", "cuando", "peligro", "medidaProvisional", "medida", "razonMedida", "pretensiones", "pruebas", "hechosAdicionales", "motivoAhora", "otrosMedios", "lugarHechos", "relacionAccionado"];
+export { CONVERSATION_FIELDS } from "./conversation-catalog";
+import { CONVERSATION_FIELDS, conversationFields } from "./conversation-catalog";
 export const CONVERSATION_QUESTIONS: Record<string, string> = {
   hechos: "¿Qué pasó?", accionado: "¿Quién te está afectando?", actuaciones: "¿Qué has intentado para resolverlo?",
   cuando: "¿Cuándo pasó?", medidaProvisional: "¿Hay peligro para tu vida o tu salud si esperas?",
@@ -25,12 +26,12 @@ export function restoreConversation(value: unknown): ConversationState {
   return { ...emptyConversation(v.mode === "conversation" ? "conversation" : "steps"), mensajes,
     propuestas: Array.isArray(v.propuestas) ? v.propuestas.filter(p => p && CONVERSATION_FIELDS.includes(p.campo) && typeof p.valor === "string" && p.valor.length <= 8000 && typeof p.cita_literal === "string" && hasUserQuote(mensajes, p.cita_literal)) : [],
     draft: typeof v.draft === "string" ? v.draft.slice(0, 2000) : "",
-    preguntados: Object.fromEntries(Object.keys(CONVERSATION_QUESTIONS).map(k => [k, Math.min(2, Math.max(0, Number(v.preguntados?.[k]) || 0))])),
+    preguntados: Object.fromEntries(CONVERSATION_FIELDS.map(k => [k, Math.min(2, Math.max(0, Number(v.preguntados?.[k]) || 0))])),
     contexto: CONVERSATION_FIELDS.includes(v.contexto || "") ? v.contexto : undefined,
     notice: typeof v.notice === "string" ? v.notice.slice(0, 600) : "", peligro: v.peligro === true,
   };
 }
-export function conversationRequest(state: ConversationState, data: ToolData) {
+export function conversationRequest(state: ConversationState, data: ToolData, kind = "tutela") {
   // Recorta solo el contexto que viaja. El historial local completo se conserva.
   const mensajes: ConversationMessage[] = [];
   let length = 0;
@@ -38,10 +39,10 @@ export function conversationRequest(state: ConversationState, data: ToolData) {
     if (mensajes.length >= 16 || length + m.content.length > 16000) break;
     mensajes.unshift(m); length += m.content.length;
   }
-  return { kind: "tutela", mensajes, confirmados: Object.fromEntries(Object.entries(data).filter(([k, v]) => CONVERSATION_FIELDS.includes(k) && typeof v === "string")), preguntados: state.preguntados, contexto: state.contexto };
+  return { kind, mensajes, confirmados: Object.fromEntries(Object.entries(data).filter(([k, v]) => conversationFields(kind).some(f => f.name === k) && typeof v === "string")), preguntados: state.preguntados, contexto: state.contexto };
 }
 export function receiveConversation(state: ConversationState, result: ConversationResult): ConversationState {
-  const question = result.pregunta && result.campoPregunta && Object.hasOwn(CONVERSATION_QUESTIONS, result.campoPregunta) ? result.campoPregunta : Object.keys(CONVERSATION_QUESTIONS).find(k => CONVERSATION_QUESTIONS[k] === result.pregunta);
+  const question = result.pregunta && result.campoPregunta && CONVERSATION_FIELDS.includes(result.campoPregunta) ? result.campoPregunta : Object.keys(CONVERSATION_QUESTIONS).find(k => CONVERSATION_QUESTIONS[k] === result.pregunta);
   const propuestas = [...state.propuestas];
   // El servidor valida la limpieza del valor; aquí conservamos su cita y exigimos aceptación explícita.
   for (const p of result.propuestas) if (CONVERSATION_FIELDS.includes(p.campo) && p.valor.trim() && p.valor.length <= 2000 && hasUserQuote(state.mensajes, p.cita_literal) && !propuestas.some(v => v.campo === p.campo && v.valor === p.valor)) propuestas.push(p);

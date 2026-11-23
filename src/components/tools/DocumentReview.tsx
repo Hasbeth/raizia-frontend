@@ -4,6 +4,7 @@ import Link from "next/link";
 import { buildModel } from "@/lib/document-model";
 import { reviewQuality } from "@/lib/tools-quality";
 import { TOOLS, stepApplies, type ToolData } from "@/lib/tools-config";
+import { ToolHelp } from "./ToolHelp";
 import { ToolFields } from "./ToolFields";
 import { JOURNEY } from "@/lib/tools-journey";
 import { addBusinessDays, deadlineDays } from "@/lib/tools-deadlines";
@@ -49,6 +50,7 @@ export function DocumentReview({ kind, data, onChange, editField }: { kind: stri
   };
   const copy = async () => { try { await navigator.clipboard.writeText(model.email); setMessage("Correo copiado. Revisa los datos por completar antes de enviarlo."); } catch { setMessage("Selecciona el texto del correo y cópialo. Tu navegador no permitió copiarlo automáticamente."); } };
   return <div className="space-y-6">
+    <ToolHelp kind={kind} data={data} action="revision" editField={editAnswer} />
     <section className="card p-5 sm:p-7" aria-labelledby="revision-calidad">
       <p className="eyebrow">Revisamos contigo</p><h2 id="revision-calidad" className="mt-2 text-2xl text-forest-900">Antes de preparar tu documento</h2>
       <p className={`mt-4 rounded-xl border p-4 font-semibold ${quality.level === "red" ? "border-red-300 bg-red-50 text-red-900" : quality.level === "amber" ? "border-amber-300 bg-amber-50 text-amber-950" : "border-forest-300 bg-forest-50 text-forest-900"}`} role="status">{quality.level === "red" ? "Rojo · faltan respuestas obligatorias" : quality.level === "amber" ? "Amarillo · hay puntos para revisar" : "Verde · no encontramos datos pendientes"}</p>
@@ -81,6 +83,7 @@ export function DocumentReview({ kind, data, onChange, editField }: { kind: stri
     {message && <p role="status" className="notice">{message}</p>}
     {downloaded && <section className="rounded-[2rem] border border-forest-300 bg-forest-50 p-6 sm:p-8" aria-labelledby="que-sigue"><p className="eyebrow">Tu siguiente paso</p><h2 id="que-sigue" className="mt-2 text-3xl text-forest-900">Qué sigue</h2><p className="mt-4">La descarga se inició. Busca el archivo en Descargas, revisa los datos resaltados y firma el documento.</p><ol className="mt-5 list-decimal space-y-4 pl-5"><li>{journey.where}{kind === "tutela" && <p className="mt-2 font-semibold">Opción digital: busca «Tutela en Línea» en el sitio oficial de la Rama Judicial.</p>}</li><li>Guarda el documento enviado y la constancia: número de radicación, fecha, sello o correo de recibo. Una foto también te ayuda a conservarla.</li><li>{journey.term}</li></ol>
       {days !== null && <div className="mt-5 rounded-2xl bg-paper p-5"><label htmlFor="fecha-radicacion" className="label">{kind === "impugnacion" ? "Fecha de notificación del fallo" : "Fecha en que recibieron tu documento"}</label><input id="fecha-radicacion" type="date" value={startDate} className="input" onChange={e => setStartDate(e.target.value)} /><p className="mt-3" role="status">{estimated ? `Fecha estimada: ${estimated} (${days} días hábiles, desde el día siguiente).` : "Elige una fecha válida para calcular una estimación."}</p><p className="mt-2 text-sm text-muted">Se excluyen sábados, domingos y festivos nacionales de Colombia. Confirma con la entidad o el juzgado: cierres locales, suspensiones o prórrogas pueden cambiar la fecha. No esperes al último día.</p></div>}
+      <ToolHelp kind={kind} data={data} action="siguiente" />
       <h3 className="mt-6 text-xl text-forest-900">Si no responden o el problema sigue</h3><p className="mt-2">{journey.next}</p><Link className="btn btn-primary mt-4" href={`/herramientas/${TOOLS[kind === "reclamacion" && String(data.tipoReclamacion).startsWith("Antes de una acción popular") ? "popular" : journey.nextKind].slug}`}>Conocer el siguiente paso</Link>{kind === "tutela" && <Link className="btn btn-secondary mt-3 ml-2" href={`/herramientas/${TOOLS.impugnacion.slug}`}>Revisar impugnación</Link>}
     </section>}
   </div>;

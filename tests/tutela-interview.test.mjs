@@ -6,7 +6,7 @@ test('Entrevista real con stubs: 12 preguntas, organizador aceptado, sugerencia 
   const ui = interviewHarness();
   assert.match(ui.text(), /Pregunta 1 de 12/);
   await ui.input('respuesta', 'La EPS ficticia negó el medicamento ficticio.');
-  await ui.submit();
+  await ui.act(() => ui.button('Ordenar mi respuesta con IA').props.onClick());
   assert.match(ui.text(), /Así lo ordené/);
   assert.equal(ui.saved().data.hechos, undefined);
   await ui.act(() => ui.button('Usar mis palabras').props.onClick());
@@ -24,7 +24,7 @@ test('Entrevista real con stubs: 12 preguntas, organizador aceptado, sugerencia 
   assert.equal(ui.saved().data.derechos, undefined);
   await ui.act(() => ui.button('Confirmar estos derechos').props.onClick());
   assert.equal(ui.saved().data.derechos.length, 1);
-  await ui.input('respuesta', 'Que entreguen el medicamento ficticio.'); await ui.submit();
+  await ui.input('respuesta', 'Que entreguen el medicamento ficticio.'); await ui.act(() => ui.button('Ordenar mi respuesta con IA').props.onClick());
   await ui.act(() => ui.button('Sí, está bien').props.onClick());
   await ui.input('respuesta', 'ninguna por ahora'); await ui.submit();
   assert.match(ui.text(), /Pregunta 9 de 12/);

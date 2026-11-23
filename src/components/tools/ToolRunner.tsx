@@ -25,7 +25,7 @@ export function ToolRunner({ kind }: { kind: string }) {
       <div><h2 className="text-xl text-forest-900">Qué plazo tiene</h2><p className="mt-2">{journey.term}</p></div>
       <p className="rounded-xl bg-sand p-4">{NEEDS.find(n => n.kind === kind)?.avoid || tool.warnings[0]}</p>
       <p className="text-sm text-muted">Una pregunta a la vez. Puedes guardar y volver. El avance queda en este dispositivo; si lo compartes, usa «Borrar mis datos» al terminar.</p>
-      {kind === "tutela" ? <div className="grid gap-3 sm:grid-cols-2"><button type="button" className="btn btn-primary min-h-16 w-full" onClick={() => { setMode("conversation"); setStarted(true); }}>Contarlo conversando</button><button type="button" className="btn btn-primary min-h-16 w-full" onClick={() => { setMode("steps"); setStarted(true); }}>Responder paso a paso</button></div> : <button type="button" className="btn btn-primary" onClick={() => setStarted(true)}>Empezar o retomar</button>}
+      {<div className="grid gap-3 sm:grid-cols-2"><button type="button" className="btn btn-primary min-h-16 w-full" onClick={() => { setMode("conversation"); setStarted(true); }}>Contarlo conversando</button><button type="button" className="btn btn-primary min-h-16 w-full" onClick={() => { setMode("steps"); setStarted(true); }}>Responder paso a paso</button></div>}
       <button type="button" className="btn btn-secondary" onClick={() => speak(`${tool.description} Ten a mano: ${journey.before} ${journey.where} ${journey.term}`)}>Escuchar</button>
     </div>
   </section>;

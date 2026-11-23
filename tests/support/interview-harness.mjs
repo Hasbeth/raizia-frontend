@@ -18,7 +18,7 @@ export function interviewHarness(saved, options = {}) {
     const map = new Map(initial);
     return { getItem: k => map.get(k) ?? null, setItem: (k, v) => map.set(k, v), removeItem: k => map.delete(k), key: i => [...map.keys()][i], get length() { return map.size; } };
   };
-  const localStorage = storage(saved ? [[drafts.draftKey('tutela'), JSON.stringify(saved)]] : []);
+  const localStorage = storage(saved ? [[drafts.draftKey(options.kind || 'tutela'), JSON.stringify(saved)]] : []);
   const browser = { localStorage, sessionStorage: storage(), requestAnimationFrame: fn => { frames.set(++frameId, fn); return frameId; }, cancelAnimationFrame: id => frames.delete(id) };
   const changed = (before, after) => !before || !after || before.length !== after.length || after.some((v, i) => !Object.is(v, before[i]));
   const react = {
@@ -38,6 +38,7 @@ export function interviewHarness(saved, options = {}) {
     '@/components/Logo': { LogoMark: 'logo' }, '@/lib/speech': { speak(text) { spoken.push(text); }, stopSpeaking() {} },
     '@/lib/document-model': { entries: v => String(v || '').split('\n').filter(Boolean) },
     './RouteCards': { RouteCards: 'routes' }, './DocumentReview': { DocumentReview: 'review' },
+    './ToolHelp': { ToolHelp: 'tool-help' },
     './Conversation': { Conversation: 'conversation', ConversationNotes: 'conversation-notes' },
     '@/lib/tools-conversation': conversation, '@/lib/emergency': emergency,
     '@/lib/dictation': { recognitionConstructor: () => options.Recognition },
@@ -64,7 +65,7 @@ export function interviewHarness(saved, options = {}) {
   const { DocumentReview } = load('../../src/components/tools/DocumentReview.tsx');
   const { Interview } = load('../../src/components/tools/Interview.tsx');
   const { Conversation, ConversationNotes } = load('../../src/components/tools/Conversation.tsx');
-  const chatProps = () => ({ state: chatState, data: chatData, onChange: next => { chatState = typeof next === 'function' ? next(chatState) : next; dirty = true; }, onData: next => { chatData = next; dirty = true; }, onAccept: p => { chatData = conversation.acceptConversationProposal(chatData, p); dirty = true; }, onReview: () => { reviewed = true; } });
+  const chatProps = () => ({ kind: options.kind || 'tutela', state: chatState, data: chatData, onChange: next => { chatState = typeof next === 'function' ? next(chatState) : next; dirty = true; }, onData: next => { chatData = next; dirty = true; }, onAccept: p => { chatData = conversation.acceptConversationProposal(chatData, p); dirty = true; }, onReview: () => { reviewed = true; } });
   function expand(node) {
     if (node == null || typeof node !== 'object') return node;
     if (Array.isArray(node)) return node.map(expand);
@@ -73,7 +74,7 @@ export function interviewHarness(saved, options = {}) {
   }
   function flush() {
     for (let turn = 0; turn < 40 && (dirty || effects.length || frames.size); turn++) {
-      if (dirty) { dirty = false; cursor = 0; tree = expand(options.component === 'DocumentReview' ? DocumentReview({ kind: 'tutela', data: chatData, onChange: next => { chatData = next; dirty = true; }, editField: () => {} }) : options.component === 'Conversation' ? Conversation(chatProps()) : options.component === 'ConversationNotes' ? ConversationNotes(chatProps()) : Interview({ kind: 'tutela' })); }
+      if (dirty) { dirty = false; cursor = 0; tree = expand(options.component === 'DocumentReview' ? DocumentReview({ kind: options.kind || 'tutela', data: chatData, onChange: next => { chatData = next; dirty = true; }, editField: () => {} }) : options.component === 'Conversation' ? Conversation(chatProps()) : options.component === 'ConversationNotes' ? ConversationNotes(chatProps()) : Interview({ kind: options.kind || 'tutela' })); }
       for (const effect of effects.splice(0)) effect();
       const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn());
     }
@@ -95,6 +96,6 @@ export function interviewHarness(saved, options = {}) {
     button: label => find(n => n.type === 'button' && text(n) === label),
     input: (id, value) => act(() => find(n => n.props.id === id).props.onChange({ target: { value } })),
     submit: () => act(() => find(n => n.type === 'form').props.onSubmit({ preventDefault() {} })),
-    saved: () => JSON.parse(localStorage.getItem(drafts.draftKey('tutela'))),
+    saved: () => JSON.parse(localStorage.getItem(drafts.draftKey(options.kind || 'tutela'))),
   };
 }
