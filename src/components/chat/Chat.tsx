@@ -40,6 +40,8 @@ function relativeDay(ts: number): string {
   return d.toLocaleDateString("es-CO", { day: "numeric", month: "short" });
 }
 
+const LEGACY_LIMIT = "Hay muchas consultas en este momento. Espera un momento y vuelve a preguntar.";
+
 export function Chat() {
   const router = useRouter();
   const params = useSearchParams();
@@ -165,12 +167,15 @@ export function Chat() {
       const convId = activeRef.current || uid();
       if (!activeRef.current) setActiveId(convId);
 
-      const history = messagesRef.current
+      // Un intento fallido no es parte del caso: no viaja a la IA ni se duplica al reenviarlo.
+      const failed_ = (m?: ChatMessage) => m?.role === "assistant" && (!!m.error && !m.content || m.content === LEGACY_LIMIT);
+      const clean = (list: ChatMessage[]) => list.filter((m, i) => !failed_(m) && !(m.role === "user" && failed_(list[i + 1]) && (m.content === text || i + 2 === list.length)));
+      const history = clean(messagesRef.current)
         .filter((m) => m.content)
         .map((m) => ({ role: m.role, content: m.content }));
       const userMsg: ChatMessage = { id: uid(), role: "user", content: text };
       const botMsg: ChatMessage = { id: uid(), role: "assistant", content: "", status: "buscando" };
-      setMessages((prev) => [...prev, userMsg, botMsg]);
+      setMessages((prev) => [...prev.filter((m, i) => !(failed_(m) && prev[i - 1]?.content === text) && !(m.role === "user" && m.content === text && failed_(prev[i + 1]))), userMsg, botMsg]);
       setInput(text);
       setBusy(true);
       stick.current = true;
@@ -203,7 +208,7 @@ export function Chat() {
           const body = await res.json().catch(() => null);
           keepQuestion = true;
           if (abortRef.current === controller) patchLast(m => ({ ...m,
-            content: typeof body?.message === "string" ? body.message : "Hay muchas consultas en este momento. Espera un momento y vuelve a preguntar.",
+            error: typeof body?.message === "string" ? body.message : "Hay muchas consultas en este momento. Espera un momento y vuelve a preguntar.",
             meta: { type: "meta", mode: "conversacion", topics: [], sources: [] },
           }));
         } else {
