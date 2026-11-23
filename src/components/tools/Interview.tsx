@@ -25,6 +25,7 @@ import { EMERGENCY_NOTICE, explicitDanger } from "@/lib/emergency";
 import { ToolFields } from "./ToolFields";
 import { loadProfile } from "../chat/ProfileStep";
 import { takeCase, type CaseHandoff } from "@/lib/case-context";
+import { detectHealthCase } from "@/lib/health-route";
 import { clearToolDrafts, draftKey, readDraft, type SavedDraft, type ParkedAnswers } from "@/lib/tools-draft";
 import {
   askFor,
@@ -386,10 +387,13 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
   };
   const prompt = current?.title || (field ? askFor(field) : "");
   const multiline = field?.type === "textarea";
-  const entityHints =
+  const baseHints =
     field && field.type === "text" && (field.name === "entidad" || field.name === "accionado")
       ? suggestEntities(`${String(data.hechos || "")} ${String(data.proyecto || "")}`, String(data.ciudad || ""))
       : [];
+  // En salud, la tutela apunta a la EPS nombrada; Supersalud no se sugiere como accionada.
+  const healthCase = kind === "tutela" && field?.name === "accionado" ? detectHealthCase(String(data.hechos || "")) : null;
+  const entityHints = healthCase ? [...(healthCase.eps ? [{ name: healthCase.eps, why: "Es la EPS que nombraste y debe garantizar el servicio." }] : []), ...baseHints.filter(h => !/superintendencia|supersalud/i.test(h.name))] : baseHints;
 
   return (
     <div className="tools-flow mx-auto w-full max-w-3xl">

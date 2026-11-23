@@ -19,6 +19,8 @@ import type { ChatMeta, ChatSource } from "@/lib/constants";
 import { formatDate } from "@/lib/constants";
 import { LogoMark } from "@/components/Logo";
 import { saveCase } from "@/lib/case-context";
+import { citationLabel, detectHealthCase } from "@/lib/health-route";
+import { HealthActions } from "@/components/tools/HealthActions";
 import type { ConversationMessage } from "@/lib/tools-conversation";
 import { speakAnswer, supportsSpeech, subscribeSpeechSupport } from "@/lib/speech";
 
@@ -95,6 +97,8 @@ export function AssistantMessage({
   const sources = meta?.sources || [];
   const valid = new Set(sources.map((s) => s.n));
   const streaming = status === "buscando" || status === "redactando";
+  const userStory = (conversation || []).filter(m => m.role === "user").map(m => m.content).join("\n") || question;
+  const healthStory = detectHealthCase(userStory) ? userStory : "";
   const generative = meta?.mode === "ia" || meta?.mode === "conversacion";
   const spokenText = content || (meta?.mode === "sin_resultados"
     ? "No encontré información. Intenta contarme más sobre lo que pasa."
@@ -203,10 +207,10 @@ export function AssistantMessage({
                             type="button"
                             onClick={() => goToSource(n)}
                             title={s ? `${s.title}${s.heading ? " — " + s.heading : ""}` : undefined}
-                            aria-label={`Ver fuente ${n}`}
-                            className="mx-0.5 inline-flex h-[1.35rem] min-w-[1.35rem] -translate-y-px items-center justify-center rounded-md bg-forest-100 px-1 align-middle text-[0.72rem] font-bold text-forest-800 transition-colors hover:bg-forest-700 hover:text-paper"
+                            aria-label={`Ver fuente: ${citationLabel(s, n)}`}
+                            className="mx-0.5 inline rounded-md bg-forest-100 px-1.5 py-0.5 text-left text-xs font-medium text-forest-800 underline-offset-2 hover:underline"
                           >
-                            {n}
+                            {citationLabel(s, n)}
                           </button>
                         );
                       }
@@ -340,7 +344,9 @@ export function AssistantMessage({
           </p>
         )}
 
-        {!streaming && meta?.tool && (
+        {!streaming && !!onRetry && !!healthStory && <HealthActions story={healthStory} messages={conversation} />}
+
+        {!streaming && meta?.tool && !healthStory && (
           <Link
             href={`/herramientas/${meta.tool.slug}`}
             onClick={() => {

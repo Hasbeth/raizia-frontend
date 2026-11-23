@@ -9,6 +9,7 @@ import { ToolFields } from "./ToolFields";
 import { JOURNEY } from "@/lib/tools-journey";
 import { addBusinessDays, deadlineDays } from "@/lib/tools-deadlines";
 import { CaseTracker, TUTELA_ONLINE } from "./CaseTracker";
+import { HealthActions } from "./HealthActions";
 
 function Marked({ text }: { text: string }) {
   return <>{text.split(/(\[completar: [^\]]+\])/g).map((part, i) => part.startsWith("[completar:") ? <mark key={i}>{part}</mark> : part)}</>;
@@ -81,6 +82,7 @@ export function DocumentReview({ kind, data, onChange, editField }: { kind: stri
       <button type="button" className="btn btn-accent w-full !min-h-14" disabled={working || quality.level === "red" || !config.confirmations.every(c => confirmed[c.name])} onClick={generate}>{working ? "Preparando…" : "Descargar documento Word"}</button>
       {!config.confirmations.every(c => confirmed[c.name]) && <p className="text-sm text-muted">Confirma las declaraciones para descargar. Los datos amarillos se pueden completar después.</p>}
     </>}
+    {kind === "tutela" && <HealthActions inTutela data={data} story={[data.hechos, data.hechosAdicionales, data.actuaciones, data.accionado].filter(Boolean).join("\n")} />}
     {message && <p role="status" className="notice">{message}</p>}
     {kind === "tutela" && !downloaded && <details className="card p-5"><summary className="min-h-11 cursor-pointer py-3 font-semibold">Ya presenté mi tutela: seguir el caso</summary><CaseTracker /></details>}
     {downloaded && <section className="rounded-[2rem] border border-forest-300 bg-forest-50 p-6 sm:p-8" aria-labelledby="que-sigue"><p className="eyebrow">Tu siguiente paso</p><h2 id="que-sigue" className="mt-2 text-3xl text-forest-900">Qué sigue</h2><p className="mt-4">La descarga se inició. Busca el archivo en Descargas, revisa los datos resaltados y firma el documento.</p><ol className="mt-5 list-decimal space-y-4 pl-5"><li>{journey.where}{kind === "tutela" && <p className="mt-2 font-semibold">Opción digital: <a className="underline" href={TUTELA_ONLINE} target="_blank" rel="noreferrer noopener">Tutela en Línea de la Rama Judicial</a>. Adjunta la fórmula y los soportes, y preséntala una sola vez: repetirla por los mismos hechos puede traer sanciones.</p>}</li><li>Guarda el documento enviado y la constancia: número de radicación, fecha, sello o correo de recibo. Una foto también te ayuda a conservarla. Revisa seguido el correo que registraste, porque por ahí pueden llegar las notificaciones.</li><li>{journey.term}</li></ol>

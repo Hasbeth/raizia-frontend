@@ -9,6 +9,7 @@ import { speak, stopSpeaking } from "@/lib/speech";
 import { recognitionConstructor, type Recognition } from "@/lib/dictation";
 import { loadProfile } from "../chat/ProfileStep";
 import { RouteCards } from "./RouteCards";
+import { HealthActions } from "./HealthActions";
 import { explicitDanger, EMERGENCY_NOTICE } from "@/lib/emergency";
 import { saveCase } from "@/lib/case-context";
 import type { ConversationMessage } from "@/lib/tools-conversation";
@@ -115,6 +116,7 @@ export function Orientation() {
       {working && <p role="status" className="flex items-center gap-2 text-muted"><LoaderCircle size={16} className="animate-spin" />Pensando en lo que me cuentas…</p>}
       <div ref={end} />
     </div>
+    {!working && <HealthActions story={messages.filter(m => m.role === "user").map(m => m.content).join("\n")} messages={messages} />}
     {mechanism?.tool && !working && <section className="card mt-5 p-5" aria-label="Camino recomendado">
       <p className="eyebrow">Camino que podemos evaluar</p><h2 className="mt-1 text-2xl text-forest-900">{mechanism.title}</h2>
       {mechanism.porque && <p className="mt-2">{mechanism.porque}</p>}

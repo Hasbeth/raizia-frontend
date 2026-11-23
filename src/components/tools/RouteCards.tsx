@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 import type { Route } from "@/lib/types";
+import { readableCitations } from "@/lib/health-route";
 
 /** Caminos sugeridos por el orientador, en orden, con el paso a la herramienta que corresponde. */
 export function RouteCards({ routes, story }: { routes: Route[]; story: string }) {
@@ -39,14 +40,14 @@ export function RouteCards({ routes, story }: { routes: Route[]; story: string }
                 </p>
               )}
               <h3 className="font-sans text-[1.0625rem] font-semibold tracking-normal text-forest-900">{r.title}</h3>
-              {r.condition && <p className="mt-2 font-semibold text-forest-800">{r.condition}</p>}
-              <p className="mt-1 leading-relaxed text-ink/85">{r.why}</p>
+              {r.condition && <p className="mt-2 font-semibold text-forest-800">{readableCitations(r.condition, r.sources)}</p>}
+              <p className="mt-1 leading-relaxed text-ink/85">{readableCitations(r.why, r.sources)}</p>
             </div>
           </div>
           {r.steps.length > 0 && (
             <ul className="mt-4 list-disc space-y-2 pl-5 text-[0.9875rem] leading-relaxed text-ink/85 marker:text-clay">
               {r.steps.map((s) => (
-                <li key={s}>{s}</li>
+                <li key={s}>{readableCitations(s, r.sources)}</li>
               ))}
             </ul>
           )}
