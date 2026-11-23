@@ -18,6 +18,8 @@ import {
 import type { ChatMeta, ChatSource } from "@/lib/constants";
 import { formatDate } from "@/lib/constants";
 import { LogoMark } from "@/components/Logo";
+import { saveCase } from "@/lib/case-context";
+import type { ConversationMessage } from "@/lib/tools-conversation";
 import { speakAnswer, supportsSpeech, subscribeSpeechSupport } from "@/lib/speech";
 
 export type ChatMessage = {
@@ -71,12 +73,15 @@ function groupByDocument(sources: ChatSource[]) {
 export function AssistantMessage({
   message,
   question = "",
+  conversation,
   onRetry,
   onAnswer,
 }: {
   message: ChatMessage;
   /** Consulta de la persona que originó esta respuesta. */
   question?: string;
+  /** Lo conversado hasta aquí, para continuar en la herramienta sin repetirlo. */
+  conversation?: ConversationMessage[];
   onRetry?: () => void;
   onAnswer?: (answer: string) => void;
 }) {
@@ -341,7 +346,8 @@ export function AssistantMessage({
             onClick={() => {
               try {
                 // El relato viaja por el almacenamiento de la pestaña, no por la dirección web.
-                window.sessionStorage.setItem("raizia.relato", question);
+                if (conversation?.length) saveCase(window.sessionStorage, conversation);
+                else window.sessionStorage.setItem("raizia.relato", question);
               } catch {
                 /* sin almacenamiento */
               }

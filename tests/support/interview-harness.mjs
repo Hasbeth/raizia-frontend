@@ -6,6 +6,7 @@ import * as conversation from '../../src/lib/tools-conversation.ts';
 import * as emergency from '../../src/lib/emergency.ts';
 import * as journey from '../../src/lib/tools-journey.ts';
 import * as deadlines from '../../src/lib/tools-deadlines.ts';
+import * as caseContext from '../../src/lib/case-context.ts';
 
 // Ejecuta los handlers y efectos reales del componente con almacenamiento y APIs
 // locales. No sustituye una prueba visual en navegador ni el reconciliador React.
@@ -37,6 +38,7 @@ export function interviewHarness(saved, options = {}) {
     'lucide-react': Object.fromEntries(['ArrowLeft', 'ArrowUp', 'Check', 'ListChecks', 'LoaderCircle', 'Pencil', 'SkipForward', 'Volume2'].map(name => [name, name])),
     '@/components/Logo': { LogoMark: 'logo' }, '@/lib/speech': { speak(text) { spoken.push(text); }, stopSpeaking() {} },
     '@/lib/document-model': { entries: v => String(v || '').split('\n').filter(Boolean) },
+    './CaseTracker': { CaseTracker: 'case-tracker', TUTELA_ONLINE: 'https://procesojudicial.ramajudicial.gov.co/TutelaEnLinea' }, '@/lib/case-context': caseContext,
     './RouteCards': { RouteCards: 'routes' }, './DocumentReview': { DocumentReview: 'review' },
     './ToolHelp': { ToolHelp: 'tool-help' },
     './Conversation': { Conversation: 'conversation', ConversationNotes: 'conversation-notes' },

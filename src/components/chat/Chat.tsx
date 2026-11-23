@@ -562,6 +562,7 @@ export function Chat() {
                       key={m.id}
                       message={m}
                       question={messages[i - 1]?.role === "user" ? messages[i - 1].content : ""}
+                      conversation={messages.slice(0, i + 1).map(item => ({ role: item.role, content: item.content }))}
                       onRetry={i === messages.length - 1 && !busy ? retry : undefined}
                     />
                   ),

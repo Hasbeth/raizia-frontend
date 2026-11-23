@@ -4,7 +4,7 @@ import { speak, stopSpeaking } from "@/lib/speech";
 import { recognitionConstructor, type Recognition } from "@/lib/dictation";
 import { EMERGENCY_NOTICE, explicitDanger } from "@/lib/emergency";
 import { TOOLS, type ToolData } from "@/lib/tools-config";
-import { CONVERSATION_FIELDS, CONVERSATION_FALLBACK, conversationRequest, receiveConversation, type ConversationState, type ConversationResult, type ConversationProposal } from "@/lib/tools-conversation";
+import { acceptConversationProposal, CONVERSATION_FIELDS, CONVERSATION_FALLBACK, conversationRequest, receiveConversation, type ConversationState, type ConversationResult, type ConversationProposal } from "@/lib/tools-conversation";
 import { ToolFields } from "./ToolFields";
 
 type Props = { kind?: string; state: ConversationState; onChange: Dispatch<SetStateAction<ConversationState>>; data: ToolData; onData: (data: ToolData) => void; onAccept: (proposal: ConversationProposal) => void; onReview: () => void };
@@ -33,6 +33,10 @@ export function ConversationNotes({ kind = "tutela", state, onChange, data, onAc
 
 export function Conversation({ kind = "tutela", state, onChange, data, onData, onAccept, onReview }: Props) {
   const [working, setWorking] = useState(false);
+  const [complete, setComplete] = useState(false);
+  const dataRef = useRef(data);
+  useEffect(() => { dataRef.current = data; }, [data]);
+  const started = useRef(false);
   const [listening, setListening] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState("");
   const pending = useRef<AbortController | null>(null);
@@ -45,6 +49,37 @@ export function Conversation({ kind = "tutela", state, onChange, data, onData, o
   }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ block: "nearest" }); }, [state.mensajes.length]);
   const danger = state.peligro || explicitDanger(state.draft) || state.mensajes.some(m => m.role === "user" && explicitDanger(m.content));
+  const deliver = async (sent: ConversationState) => {
+    setWorking(true);
+    const controller = new AbortController(); pending.current = controller;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("timeout")); }, 28000); });
+      const result = await Promise.race([(async () => {
+        const response = await fetch("/api/tools/conversar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(conversationRequest(sent, data, kind)), signal: controller.signal });
+        const body = await response.json() as ConversationResult;
+        if ((!response.ok && response.status !== 429) || typeof body.respuesta !== "string" || body.respuesta.length > 1000 || !(body.pregunta === null || typeof body.pregunta === "string" && body.pregunta.length <= 240) || !Array.isArray(body.propuestas) || body.propuestas.length > 16 || body.propuestas.some(p => !p || typeof p.campo !== "string" || typeof p.valor !== "string" || typeof p.cita_literal !== "string")) throw new Error("response");
+        return body;
+      })(), timeout]);
+      if (alive.current) {
+        // Lo dicho llena solo campos vacíos; nada confirmado se reemplaza y todo se revisa antes del documento.
+        const fill = result.propuestas.filter(p => !String(dataRef.current[p.campo] ?? "").trim());
+        if (fill.length) onData(fill.reduce(acceptConversationProposal, dataRef.current));
+        onChange(prev => receiveConversation(prev, { ...result, propuestas: result.propuestas.filter(p => !fill.includes(p)) }));
+        setComplete(!result.respaldo && !result.faltan.length);
+      }
+    } catch {
+      if (alive.current) onChange(prev => ({ ...prev, mode: "steps", notice: CONVERSATION_FALLBACK }));
+    } finally { clearTimeout(timer); if (alive.current) setWorking(false); }
+  };
+  // Un caso que llega de otro flujo continúa aquí sin que la persona lo repita.
+  useEffect(() => {
+    if (started.current || state.mensajes.at(-1)?.role !== "user") return;
+    started.current = true;
+    void deliver(state);
+    // Solo al abrir la conversación.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const send = async () => {
     if (working || !state.draft.trim()) return;
     recognition.current?.stop();
@@ -53,21 +88,8 @@ export function Conversation({ kind = "tutela", state, onChange, data, onData, o
       onChange({ ...sent, peligro: true, mensajes: [...sent.mensajes, { role: "assistant", content: `${EMERGENCY_NOTICE} ¿Estás a salvo ahora?` }] });
       return;
     }
-    onChange(sent); setWorking(true);
-    const controller = new AbortController(); pending.current = controller;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("timeout")); }, 15000); });
-      const result = await Promise.race([(async () => {
-        const response = await fetch("/api/tools/conversar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(conversationRequest(sent, data, kind)), signal: controller.signal });
-        const body = await response.json() as ConversationResult;
-        if ((!response.ok && response.status !== 429) || typeof body.respuesta !== "string" || body.respuesta.length > 1000 || !(body.pregunta === null || typeof body.pregunta === "string" && body.pregunta.length <= 240) || !Array.isArray(body.propuestas) || body.propuestas.length > 16 || body.propuestas.some(p => !p || typeof p.campo !== "string" || typeof p.valor !== "string" || typeof p.cita_literal !== "string")) throw new Error("response");
-        return body;
-      })(), timeout]);
-      if (alive.current) onChange(prev => receiveConversation(prev, result));
-    } catch {
-      if (alive.current) onChange(prev => ({ ...prev, mode: "steps", notice: CONVERSATION_FALLBACK }));
-    } finally { clearTimeout(timer); if (alive.current) setWorking(false); }
+    onChange(sent);
+    await deliver(sent);
   };
   const dictate = () => {
     if (listening) { recognition.current?.stop(); return; }
@@ -94,7 +116,7 @@ export function Conversation({ kind = "tutela", state, onChange, data, onData, o
     <div role="log" aria-label="Mensajes de la conversación" aria-live="polite" className="space-y-3">
       {!state.mensajes.length && <p className="card p-4">Te escucho. ¿Qué te gustaría contarme?</p>}
       {state.mensajes.map((m, i) => <div key={i} className={`rounded-2xl border border-line p-4 ${m.role === "user" ? "bg-forest-50" : "bg-paper"}`}><p className="text-sm font-semibold">{m.role === "user" ? "Tú" : "RAIZIA"}</p><p className="mt-1 whitespace-pre-wrap">{m.content}</p><button type="button" className="btn btn-ghost mt-1" onClick={() => speak(m.content)}>Escuchar</button></div>)}
-      {working && <p role="status">Estoy leyendo lo que me cuentas…</p>}
+      {working && <p role="status">Pensando en lo que me cuentas…</p>}
       <div ref={endRef} />
     </div>
     <form className="space-y-3" onSubmit={e => { e.preventDefault(); void send(); }}>
@@ -112,6 +134,6 @@ export function Conversation({ kind = "tutela", state, onChange, data, onData, o
       })}
       <ConversationNotes kind={kind} state={state} onChange={onChange} data={data} onAccept={onAccept} />
     </details>
-    <button type="button" className="btn btn-secondary w-full" disabled={working} onClick={onReview}>Revisar mis datos y preparar el documento</button>
+    <button type="button" className={`btn w-full ${complete ? "btn-primary" : "btn-secondary"}`} disabled={working} onClick={onReview}>Revisar mis datos y preparar el documento</button>
   </section>;
 }

@@ -24,6 +24,7 @@ import { acceptConversationProposal, emptyConversation, restoreConversation, typ
 import { EMERGENCY_NOTICE, explicitDanger } from "@/lib/emergency";
 import { ToolFields } from "./ToolFields";
 import { loadProfile } from "../chat/ProfileStep";
+import { takeCase, type CaseHandoff } from "@/lib/case-context";
 import { clearToolDrafts, draftKey, readDraft, type SavedDraft, type ParkedAnswers } from "@/lib/tools-draft";
 import {
   askFor,
@@ -108,6 +109,17 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const story = useRef("");
+  const incomingCase = useRef<CaseHandoff | null>(null);
+  const skipFilled = useRef(false);
+  const firstMissing = (values: ToolData) => {
+    const list = interviewQuestions(config, values);
+    const index = list.findIndex(q => q.fields.some(f => f.required && !hasValue(values[f.name])));
+    return index < 0 ? list.length : index;
+  };
+  const startCase = (handoff: CaseHandoff) => {
+    setConversation({ ...emptyConversation("conversation"), mensajes: handoff.mensajes });
+    if (kind === "tutela" && handoff.medida) setData(previous => ({ ...previous, medidaProvisional: "Sí" }));
+  };
 
   const done = idx >= questions.length;
   const current = done ? null : questions[idx];
@@ -123,7 +135,12 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try {
-        setSaved(readDraft(window.localStorage, kind));
+        const existing = readDraft(window.localStorage, kind);
+        const handoff = takeCase(window.sessionStorage);
+        setSaved(existing);
+        // Si ya había un borrador, la persona decide; el caso nuevo espera a «empezar de nuevo».
+        if (handoff && existing) incomingCase.current = handoff;
+        else if (handoff) startCase(handoff);
         story.current = window.sessionStorage.getItem("raizia.relato") || "";
         window.sessionStorage.removeItem("raizia.relato");
       } catch { setStorageMessage("No se puede guardar en este navegador. Mantén esta página abierta."); }
@@ -178,6 +195,12 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
   }, [proposal, probe, redirect, done]);
 
   const advance = (next: ToolData) => {
+    if (skipFilled.current) {
+      const pending = firstMissing(next);
+      setIdx(pending);
+      if (pending >= interviewQuestions(config, next).length) skipFilled.current = false;
+      return;
+    }
     const q = questions[idx];
     if (kind === "tutela") {
       const nextQuestions = interviewQuestions(config, next);
@@ -318,10 +341,12 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
     restoredAnswer.current = null;
     try { clearToolDrafts(window.localStorage); clearToolDrafts(window.sessionStorage); window.sessionStorage.removeItem("raizia.relato"); }
     catch { setStorageMessage("No pudimos borrar el almacenamiento. Usa los ajustes de este navegador."); }
-    setIdx(0); setResume(null);
+    setIdx(0); setResume(null); skipFilled.current = false;
+    if (incomingCase.current) { startCase(incomingCase.current); incomingCase.current = null; }
   };
   const resumeSaved = () => {
     if (!saved) return;
+    incomingCase.current = null;
     const restored = kind === "tutela" ? migrateTutelaDraft(saved) : saved;
     restoredAnswer.current = { answer: restored.answer, picked: restored.picked };
     setConversation(restoreConversation(saved.conversation));
@@ -406,7 +431,7 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
             tu documento. Responde con tus palabras; no importa si hay errores.
           </p>
         </Bot>}
-        {ready && !saved && chatting && <Conversation kind={kind} state={conversation} onChange={setConversation} data={data} onData={updateChatData} onAccept={acceptChat} onReview={() => { setIdx(questions.length); changeMode("steps"); }} />}
+        {ready && !saved && chatting && <Conversation kind={kind} state={conversation} onChange={setConversation} data={data} onData={updateChatData} onAccept={acceptChat} onReview={() => { const parkedAnswer = Object.keys(parked).length > 0; skipFilled.current = !parkedAnswer; setIdx(parkedAnswer ? questions.length : firstMissing(data)); changeMode("steps"); }} />}
 
         {ready && saved && <section className="card p-6" aria-label="Retomar avance"><h2 className="text-2xl text-forest-900">Hay un avance guardado</h2><p className="mt-3">Si es tuyo, puedes retomarlo. Si este dispositivo lo usó otra persona, bórralo para empezar.</p><div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={resumeSaved} className="btn btn-primary">Retomar mi avance</button><button type="button" onClick={restart} className="btn btn-secondary">Borrar y empezar</button></div></section>}
         {ready && !saved && !chatting && idx > 0 && !done && <button type="button" className="btn btn-ghost" onClick={() => setIdx(idx - 1)}><ArrowLeft size={16} /> Volver a la pregunta anterior</button>}
