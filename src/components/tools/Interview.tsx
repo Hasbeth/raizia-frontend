@@ -115,7 +115,10 @@ export function Interview({ kind, onSwitch, initialMode = "steps" }: { kind: str
   const firstMissing = (values: ToolData) => {
     const list = interviewQuestions(config, values);
     const index = list.findIndex(q => q.fields.some(f => f.required && !hasValue(values[f.name])));
-    return index < 0 ? list.length : index;
+    if (index >= 0) return index;
+    // El contacto exige al menos un medio, aunque ninguno sea obligatorio por separado.
+    const contact = validateTool(config, values, "contacto").direccion ? list.findIndex(q => q.stepId === "contacto") : -1;
+    return contact >= 0 ? contact : list.length;
   };
   const startCase = (handoff: CaseHandoff) => {
     setConversation({ ...emptyConversation("conversation"), mensajes: handoff.mensajes });
